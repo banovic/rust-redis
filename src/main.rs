@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 use std::{io::{BufRead, BufReader, Read, Write}, net::TcpListener};
 
+
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -12,15 +13,14 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 println!("accepted new connection");
-                let reader_half = _stream.try_clone().unwrap();
-                let mut reader = BufReader::new(reader_half);
-                let mut line = String::new();
+                let mut buffer: Vec<u8> = Vec::new();
 
-                while let Ok(n) = reader.read_line(&mut line) {
-                    if n == 0 {
+                loop {
+                    let _ = _stream.read_to_end(&mut buffer);
+                    if buffer.len() == 0 {
                         break;
                     }
-                    println!("Received line: {}", line);
+                    println!("Received line: {:?}", buffer);
 
                     let _ = _stream.write(b"+PONG\r\n");
                 }
