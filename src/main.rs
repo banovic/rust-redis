@@ -17,6 +17,7 @@ fn main() {
 
                 loop {
                     let _ = _stream.read(&mut buffer);
+                    if buffer.len() == 0 {break;}
                     println!("Received line: {:?}", buffer);
                     let _ = _stream.write(b"+PONG\r\n");
                     buffer.clear();
