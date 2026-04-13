@@ -12,7 +12,8 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 println!("accepted new connection");
-                let mut reader = BufReader::new(_stream);
+                let reader_half = _stream.try_clone().unwrap();
+                let mut reader = BufReader::new(reader_half);
                 let mut line = String::new();
 
                 while let Ok(n) = reader.read_line(&mut line) {
