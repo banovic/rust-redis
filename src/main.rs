@@ -15,9 +15,10 @@ fn main() {
                 println!("accepted new connection");
                 let mut buffer: Vec<u8> = Vec::new();
 
-                loop {
-                    let _ = _stream.read(&mut buffer);
-                    if buffer.len() == 0 {break;}
+                while let Ok(n) = _stream.read(&mut buffer) {
+                    if n == 0 {
+                        break;
+                    }
                     println!("Received line: {:?}", buffer);
                     let _ = _stream.write(b"+PONG\r\n");
                     buffer.clear();
