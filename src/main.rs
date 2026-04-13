@@ -19,7 +19,6 @@ fn main() {
                     if n == 0 {
                         break;
                     }
-                    println!("Received line: {:?}", buffer);
                     let _ = _stream.write(b"+PONG\r\n");
                     let _ = _stream.flush();
                     buffer.fill(0u8);
