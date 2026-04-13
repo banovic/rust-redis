@@ -13,7 +13,7 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 println!("accepted new connection");
-                let mut buffer: Vec<u8> = Vec::new();
+                let mut buffer= [u8; 1024];
 
                 while let Ok(n) = _stream.read(&mut buffer) {
                     if n == 0 {
@@ -21,6 +21,7 @@ fn main() {
                     }
                     println!("Received line: {:?}", buffer);
                     let _ = _stream.write(b"+PONG\r\n");
+                    let _ = _stream.flush();
                     buffer.clear();
                 }
             }
