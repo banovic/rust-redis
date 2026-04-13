@@ -17,10 +17,10 @@ fn main() {
                 let mut line = String::new();
 
                 while let Ok(n) = reader.read_line(&mut line) {
-                    println!("Received line: {}", line);
                     if n == 0 {
                         break;
                     }
+                    println!("Received line: {}", line);
 
                     let _ = _stream.write(b"+PONG\r\n");
                 }
