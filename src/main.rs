@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{io::{BufRead, BufReader, Read, Write}, net::TcpListener};
+use std::{io::{BufRead, BufReader, Read, Write}, net::TcpListener, thread};
 
 
 fn main() {
@@ -12,17 +12,19 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                println!("accepted new connection");
-                let mut buffer= [0u8; 1024];
+                thread::spawn(move || {
+                    println!("accepted new connection");
+                    let mut buffer= [0u8; 1024];
 
-                while let Ok(n) = _stream.read(&mut buffer) {
-                    if n == 0 {
-                        break;
+                    while let Ok(n) = _stream.read(&mut buffer) {
+                        if n == 0 {
+                            break;
+                        }
+                        let _ = _stream.write(b"+PONG\r\n");
+                        let _ = _stream.flush();
+                        buffer.fill(0u8);
                     }
-                    let _ = _stream.write(b"+PONG\r\n");
-                    let _ = _stream.flush();
-                    buffer.fill(0u8);
-                }
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
