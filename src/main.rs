@@ -12,8 +12,7 @@ fn main() {
         match stream {
             Ok(mut _stream) => {
                 println!("accepted new connection");
-                _stream.write(b"+PONG\r\n");
-                ()
+                let _ = _stream.write(b"+PONG\r\n");
             }
             Err(e) => {
                 println!("error: {}", e);
