@@ -16,7 +16,7 @@ fn main() {
                 let mut buffer: Vec<u8> = Vec::new();
 
                 loop {
-                    let _ = _stream.read_to_end(&mut buffer);
+                    let _ = _stream.read(&mut buffer);
                     println!("Received line: {:?}", buffer);
                     let _ = _stream.write(b"+PONG\r\n");
                     buffer.clear();
