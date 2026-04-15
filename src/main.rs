@@ -125,7 +125,7 @@ fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
     }
     let mut value: usize = 0;
     for (i, &&v) in digits.iter().enumerate() {
-        value += ((v - b'0') as usize) * (10 as usize).pow((digits.len() - i).try_into().unwrap());
+        value += ((v - b'0') as usize) * (10 as usize).pow((digits.len() - i - 1).try_into().unwrap());
     }
     println!("usize, parsed value: {}", value);
     Ok((value, RespParseContext { pos: pc.pos + digits.len(), ..pc}))
