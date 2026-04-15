@@ -105,7 +105,8 @@ struct RespParseContext<'a> {
 type RespParseResult<'a, T> = Result<(T, RespParseContext<'a>), RespParseError>;
 
 fn tag<'a>(pc: RespParseContext<'a>, tag: &'static [u8]) -> RespParseResult<'a, &'a [u8]> {
-    if pc.content[pc.pos..].starts_with(tag) {
+    let input = &pc.content[pc.pos..];
+    if input.starts_with(tag) {
         return Ok((tag, RespParseContext { pos: pc.pos + tag.len(), ..pc}));
     }
     Err(RespParseError { message: format!("no tag: {:?} found", tag) })
@@ -117,7 +118,8 @@ fn is_digit(b: u8) -> bool {
 
 fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
     println!("PC - usize: {:?}", pc);
-    let digits = pc.content[pc.pos..].iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
+    let input = &pc.content[pc.pos..];
+    let digits = input.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
     if digits.is_empty() {
         return Err(RespParseError { message: "no digits for usize value".to_string() });
     }
@@ -125,14 +127,16 @@ fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
     for (i, &&v) in digits.iter().enumerate() {
         value += (v as usize) * (10 as usize).pow((digits.len() - i).try_into().unwrap());
     }
+    println!("usize, parsed value: {}", value);
     Ok((value, RespParseContext { pos: pc.pos + digits.len(), ..pc}))
 }
 
 fn take<'a>(pc: RespParseContext<'a>, n: usize) -> RespParseResult<'a, &'a [u8]> {
-    if pc.content[pc.pos..].len() < n {
-        return Err(RespParseError { message: format!("expected {n} bytes, got {}", pc.content[pc.pos..].len()) });
+    let input = &pc.content[pc.pos..];
+    if input.len() < n {
+        return Err(RespParseError { message: format!("expected {n} bytes, got {}", input.len()) });
     }
-    let (head, _) = pc.content[pc.pos..].split_at(n);
+    let (head, _) = input.split_at(n);
     Ok((head, RespParseContext { pos: pc.pos + head.len(), ..pc}))
 }
 
