@@ -1,86 +1,5 @@
 #![allow(unused_imports)]
-use std::{fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, thread, usize};
-
-// #[derive(Debug,Clone)]
-// struct ParseError {
-//     message: String
-// }
-
-// enum RespElement {
-//     Empty,
-//     Usize {
-//         value: usize
-//     },
-//     BulkString {
-//         len: u32,
-//         bytes: Vec<u8>
-//     },
-//     Array {
-//         elements: Vec<RespElement>
-//     }
-// }
-
-// type ParserResult<'a, T> = Result<(T, &'a [u8]), ParseError>;
-
-// trait Parser<'a, T> {
-//     fn parse(&self, input: &'a [u8]) -> ParserResult<'a, T>;
-// }
-
-// impl<'a, T, F> Parser<'a, T> for F
-// where 
-// F: Fn(&'a [u8]) -> ParserResult<'a, T>
-// {
-//     fn parse(&self, input: &'a [u8]) -> ParserResult<'a, T> {
-//         self(input)
-//     }
-// }
-
-// fn tag3<'a>(bs: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
-//     move |input: &'a [u8]| {
-//         if input.len() < bs.len() {
-//             return Err(ParseError {
-//                 message: format!("expected {} bytes, got {}", bs.len(), input.len()),
-//             });
-//         }
-//         let (head, rest) = input.split_at(bs.len());
-//         if head == bs {
-//             Ok((head, rest))
-//         } else {
-//             Err(ParseError {
-//                 message: format!("expected {:?}, got {:?}", bs, head),
-//             })
-//         }
-//     }
-// }
-
-// fn usize3<'a>() -> impl Parser<'a, usize> {
-//     move |input: &'a [u8]| {
-//         let mut value: usize = 0;
-//         let digits = input.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
-//         if digits.is_empty() {
-//             return Err(ParseError {
-//                 message: "no digits".to_string()
-//             });
-//         }
-//         for (i, &&v) in digits.iter().enumerate() {
-//             value += (v as usize) * (10 as usize).pow((digits.len() - i).try_into().unwrap());
-//         }
-//         let (_, rest) = input.split_at(digits.len());
-//         Ok((value, rest))
-//     }
-// }
-
-// /// Read exactly `n` bytes.
-// fn take3<'a>(n: usize) -> impl Parser<'a, &'a [u8]> {
-//     move |input: &'a [u8]| {
-//         if input.len() < n {
-//             return Err(ParseError {
-//                 message: format!("expected {n} bytes, got {}", input.len()),
-//             });
-//         }
-//         Ok(input.split_at(n))
-//     }
-// }
+use std::{error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, thread, usize};
 
 #[derive(Debug)]
 enum Resp {
@@ -117,7 +36,6 @@ fn is_digit(b: u8) -> bool {
 }
 
 fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
-    println!("PC - usize: {:?}", pc);
     let input = &pc.content[pc.pos..];
     let digits = input.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
     if digits.is_empty() {
@@ -127,7 +45,6 @@ fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
     for (i, &&v) in digits.iter().enumerate() {
         value += ((v - b'0') as usize) * (10 as usize).pow((digits.len() - i - 1).try_into().unwrap());
     }
-    println!("usize, parsed value: {}", value);
     Ok((value, RespParseContext { pos: pc.pos + digits.len(), ..pc}))
 }
 
@@ -162,6 +79,7 @@ fn parse_array<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
         new_rest = rest;
         elements.push(el);
     }
+
     Ok((Resp::Array { elements }, new_rest))
 }
 
@@ -174,6 +92,25 @@ fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
             parse_array(pc)
         },
         _ => Err(RespParseError { message: format!("unknown RESP first byte: {}", pc.content[0]) })
+    }
+}
+
+fn process_command(input: Resp) -> Result<Resp, RespParseError>{
+    match input {
+        Resp::Array { elements } => {
+            match &elements[0] {
+                Resp::BulkString {value: command} => {
+                    let command = &command[..];
+                    let args = &elements[1..];
+                    match (command, args) {
+                        (b"ECHO", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
+                        _ => Err(RespParseError { message: format!("unsupported command or shape: {:?}", command)})
+                    }
+                }
+                _ => Err(RespParseError { message: format!("invalid command spec: {:?}", elements) })
+            }
+        },
+        _ => Err(RespParseError { message: "command must be an array (for now)".to_string() })
     }
 }
 
@@ -195,9 +132,14 @@ fn main() {
                         if n == 0 {
                             break;
                         }
-                        let r = parse_resp(RespParseContext { content: &buffer, pos: 0 });
-                        println!("Parsed resp: {:?}", r);
-                        let _ = _stream.write(b"+PONG\r\n");
+                        match parse_resp(RespParseContext { content: &buffer, pos: 0 }) {
+                            Ok((command, _)) => match process_command(command) {
+                                Ok(resp) => println!("Response: {:?}", resp),
+                                Err(error) => println!("Processing error: {:?}", error)
+                            }
+                            Err(error) => println!("Parse error: {:?}", error)
+                        }
+                        //let _ = _stream.write(b"+PONG\r\n");
                         let _ = _stream.flush();
                         buffer.fill(0u8);
                     }
