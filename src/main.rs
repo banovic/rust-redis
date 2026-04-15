@@ -105,7 +105,7 @@ struct RespParseContext<'a> {
 type RespParseResult<'a, T> = Result<(T, RespParseContext<'a>), RespParseError>;
 
 fn tag<'a>(pc: RespParseContext<'a>, tag: &'static [u8]) -> RespParseResult<'a, &'a [u8]> {
-    if pc.content.starts_with(tag) {
+    if pc.content[pc.pos..].starts_with(tag) {
         return Ok((tag, RespParseContext { pos: pc.pos + tag.len(), ..pc}));
     }
     Err(RespParseError { message: format!("no tag: {:?} found", tag) })
@@ -117,7 +117,7 @@ fn is_digit(b: u8) -> bool {
 
 fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
     println!("PC - usize: {:?}", pc);
-    let digits = pc.content.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
+    let digits = pc.content[pc.pos..].iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
     if digits.is_empty() {
         return Err(RespParseError { message: "no digits for usize value".to_string() });
     }
@@ -129,10 +129,10 @@ fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
 }
 
 fn take<'a>(pc: RespParseContext<'a>, n: usize) -> RespParseResult<'a, &'a [u8]> {
-    if pc.content.len() < n {
-        return Err(RespParseError { message: format!("expected {n} bytes, got {}", pc.content.len()) });
+    if pc.content[pc.pos..].len() < n {
+        return Err(RespParseError { message: format!("expected {n} bytes, got {}", pc.content[pc.pos..].len()) });
     }
-    let (head, _) = pc.content.split_at(n);
+    let (head, _) = pc.content[pc.pos..].split_at(n);
     Ok((head, RespParseContext { pos: pc.pos + head.len(), ..pc}))
 }
 
