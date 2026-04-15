@@ -106,7 +106,7 @@ type RespParseResult<'a, T> = Result<(T, RespParseContext<'a>), RespParseError>;
 
 fn tag<'a>(pc: RespParseContext<'a>, tag: &'static [u8]) -> RespParseResult<'a, &'a [u8]> {
     if pc.content.starts_with(tag) {
-        return Ok((tag.clone(), RespParseContext { pos: pc.pos + tag.len(), ..pc}));
+        return Ok((tag, RespParseContext { pos: pc.pos + tag.len(), ..pc}));
     }
     Err(RespParseError { message: format!("no tag: {:?} found", tag) })
 }
@@ -116,6 +116,7 @@ fn is_digit(b: u8) -> bool {
 }
 
 fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
+    println!("PC - usize: {:?}", pc);
     let digits = pc.content.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
     if digits.is_empty() {
         return Err(RespParseError { message: "no digits for usize value".to_string() });
@@ -152,7 +153,7 @@ fn parse_array<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
 
     let mut elements: Vec<Resp> = Vec::new();
     let mut new_rest = rest;
-    for i in 0..l {
+    for _ in 0..l {
         let (el, rest) = parse_resp(new_rest)?;
         new_rest = rest;
         elements.push(el);
