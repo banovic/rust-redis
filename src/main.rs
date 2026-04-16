@@ -122,7 +122,6 @@ fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
  * Process command
  */
 fn process_command(input: Resp) -> Result<Resp, RespParseError>{
-    println!("Process: input: {:?}", &input);
     match input {
         Resp::Array { elements } => {
             match &elements[0] {
