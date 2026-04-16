@@ -3,6 +3,9 @@ use std::{error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpLis
 
 #[derive(Debug)]
 enum Resp {
+    SimpleString {
+        value: Vec<u8>
+    },
     BulkString {
         value: Vec<u8>
     },
@@ -57,6 +60,26 @@ fn take<'a>(pc: RespParseContext<'a>, n: usize) -> RespParseResult<'a, &'a [u8]>
     Ok((head, RespParseContext { pos: pc.pos + head.len(), ..pc}))
 }
 
+fn take_while<'a>(pc: RespParseContext<'a>, needle: &'static [u8]) -> RespParseResult<'a, &'a [u8]> {
+    let mut i = pc.pos;
+    while i < pc.content.len() - pc.pos {
+        if pc.content[i..].starts_with(needle) {
+            return Ok((&pc.content[pc.pos..i], RespParseContext {pos: i, ..pc}));
+        }
+        i += 1;
+    }
+
+    Err(RespParseError { message: format!("expected to match needle: {:?}, but haven't", needle) })
+}
+
+fn parse_simple_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
+    let (_, rest) = tag(pc, &[b'+'])?;
+    let (s, rest) = take_while(rest, &[b'\r', b'\n'])?;
+    let (_, rest) = tag(rest, &[b'\r', b'\n'])?;
+
+    Ok((Resp::SimpleString { value: s.to_vec() }, rest))
+}
+
 fn parse_bulk_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
     let (_, rest) = tag(pc, &[b'$'])?;
     let (l, rest) = usize(rest)?;
@@ -95,6 +118,9 @@ fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
     }
 }
 
+/**
+ * Process command
+ */
 fn process_command(input: Resp) -> Result<Resp, RespParseError>{
     match input {
         Resp::Array { elements } => {
@@ -104,6 +130,8 @@ fn process_command(input: Resp) -> Result<Resp, RespParseError>{
                     let args = &elements[1..];
                     match (command, args) {
                         (b"ECHO", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
+                        (b"PING", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
+                        (b"PING", _) => Ok(Resp::BulkString { value: b"PONG".to_vec() }),
                         _ => Err(RespParseError { message: format!("unsupported command or shape: {:?}", command)})
                     }
                 }
@@ -125,6 +153,11 @@ fn write_bytes(out: &mut Vec<u8>, bs: &[u8]) {
 
 fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
     match r {
+        Resp::SimpleString { value } => {
+            write_bytes(&mut out, &[b'+']);
+            write_bytes(&mut out, &value[..]);
+            write_bytes(&mut out, &[b'\r', b'\n']);
+        },
         Resp::BulkString { value } => {
             write_bytes(&mut out, &[b'$']);
             write_usize(&mut out, value.len());
