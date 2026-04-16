@@ -114,6 +114,35 @@ fn process_command(input: Resp) -> Result<Resp, RespParseError>{
     }
 }
 
+fn write_usize(out: &mut Vec<u8>, n: usize) {
+    let mut s = n.to_string().into_bytes();
+    out.append(&mut s);
+}
+
+fn write_bytes(out: &mut Vec<u8>, bs: &[u8]) {
+    out.extend_from_slice(bs);
+}
+
+fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
+    match r {
+        Resp::BulkString { value } => {
+            write_bytes(&mut out, &[b'$']);
+            write_usize(&mut out, value.len());
+            write_bytes(&mut out, &[b'\r', b'\n']);
+            write_bytes(&mut out, &value[..]);
+            write_bytes(&mut out, &[b'\r', b'\n']);
+        },
+        Resp::Array { elements } => {
+            write_bytes(&mut out, &[b'*']);
+            write_usize(&mut out, elements.len());
+            write_bytes(&mut out, &[b'\r', b'\n']);
+            for e in elements {
+                encode_resp(e, out);
+            }
+        }
+    }
+}
+
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -134,7 +163,12 @@ fn main() {
                         }
                         match parse_resp(RespParseContext { content: &buffer, pos: 0 }) {
                             Ok((command, _)) => match process_command(command) {
-                                Ok(resp) => println!("Response: {:?}", resp),
+                                Ok(resp) => {
+                                    println!("Response: {:?}", resp);
+                                    let mut out = Vec::new();
+                                    encode_resp(&resp, &mut out);
+                                    let _ = _stream.write(&out[..]);
+                                },
                                 Err(error) => println!("Processing error: {:?}", error)
                             }
                             Err(error) => println!("Parse error: {:?}", error)
