@@ -197,7 +197,7 @@ fn main() {
                         match parse_resp(RespParseContext { content: &buffer, pos: 0 }) {
                             Ok((command, _)) => match process_command(command) {
                                 Ok(resp) => {
-                                    println!("Response: {:?}", resp);
+                                    //println!("Response: {:?}", resp);
                                     let mut out = Vec::new();
                                     encode_resp(&resp, &mut out);
                                     let _ = _stream.write(&out[..]);
