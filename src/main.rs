@@ -132,7 +132,7 @@ fn process_command(input: Resp) -> Result<Resp, RespParseError>{
                     match (command, args) {
                         (b"ECHO", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
                         (b"PING", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
-                        (b"PING", _) => Ok(Resp::BulkString { value: b"PONG".to_vec() }),
+                        (b"PING", _) => Ok(Resp::SimpleString { value: b"PONG".to_vec() }),
                         _ => Err(RespParseError { message: format!("unsupported command or shape: {:?}", command)})
                     }
                 }
