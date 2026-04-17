@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, sync::{Arc, RwLock}, thread, usize};
+use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, sync::{Arc, RwLock}, thread, time::SystemTime, usize};
 
 #[derive(Debug)]
 enum Resp {
@@ -118,34 +118,71 @@ fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
         _ => Err(RespParseError { message: format!("unknown RESP first byte: {}", pc.content[0]) })
     }
 }
+/**
+ * Store
+ */
+struct StoreValue {
+    t: Option<SystemTime>,
+    ttl: u64,
+    value: Vec<u8>
+}
 
+type Store = HashMap<Vec<u8>, Vec<u8>>;
 /**
  * Process command
  */
-fn process_command(input: Resp, store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError>{
+fn process_echo(args: &[Resp]) -> Result<Resp, RespParseError> {
+    match args {
+        [Resp::BulkString { value }] => Ok(Resp::BulkString { value: value.to_vec() }),
+        _ => Err(RespParseError { message: format!("Unsupported ECHO command shape: {:?}", args) })
+    }
+}
+
+fn process_ping(args: &[Resp]) -> Result<Resp, RespParseError> {
+    match args {
+        [Resp::BulkString { value }] => Ok(Resp::BulkString { value: value.to_vec() }),
+        [] => Ok(Resp::SimpleString { value: b"PONG".to_vec() }),
+        _ => Err(RespParseError { message: format!("Unsupported PING command shape: {:?}", args) })
+    }
+}
+
+fn process_set(args: &[Resp], store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError> {
+    match args {
+        [Resp::BulkString { value: key }, Resp::BulkString { value }] => {
+            let mut wstore = store.write().unwrap();
+            (*wstore).insert(key.to_vec(), value.to_vec());
+            Ok(Resp::SimpleString { value: b"OK".to_vec() })
+        },
+        _ => Err(RespParseError { message: format!("Unsupported SET command shape: {:?}", args) })
+    }
+}
+
+fn process_get(args: &[Resp], store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError> {
+    match args {
+        [Resp::BulkString { value: key }] => {
+            let rstore = store.read().unwrap();
+            match rstore.get(key) {
+                Some(value) => Ok(Resp::BulkString { value: value.to_vec() }),
+                None => Ok(Resp::Null)
+            }
+        },
+        _ => Err(RespParseError { message: format!("Unsupported GET command shape: {:?}", args) })
+    }
+}
+
+fn process_command(input: Resp, store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError> {
     match input {
         Resp::Array { elements } => {
             match &elements[0] {
                 Resp::BulkString {value: command} => {
                     let command = &command[..];
                     let args = &elements[1..];
-                    match (command, args) {
-                        (b"ECHO", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
-                        (b"PING", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
-                        (b"PING", _) => Ok(Resp::SimpleString { value: b"PONG".to_vec() }),
-                        (b"SET", [Resp::BulkString { value: key }, Resp::BulkString { value }]) => {
-                            let mut wstore = store.write().unwrap();
-                            (*wstore).insert(key.to_vec(), value.to_vec());
-                            Ok(Resp::SimpleString { value: b"OK".to_vec() })
-                        },
-                        (b"GET", [Resp::BulkString { value: key }]) => {
-                            let rstore = store.read().unwrap();
-                            match rstore.get(key) {
-                                Some(value) => Ok(Resp::BulkString { value: value.to_vec() }),
-                                None => Ok(Resp::Null)
-                            }
-                        },
-                        _ => Err(RespParseError { message: format!("unsupported command or shape: {:?}", command)})
+                    match command {
+                        b"ECHO" => process_echo(args),
+                        b"PING" => process_ping(args),
+                        b"SET" => process_set(args, store),
+                        b"GET" => process_get(args, store),
+                        _ => Err(RespParseError { message: format!("Unsupported command: {:?} with shape: {:?}", command, args)})
                     }
                 }
                 _ => Err(RespParseError { message: format!("invalid command spec: {:?}", elements) })
