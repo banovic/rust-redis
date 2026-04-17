@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, sync::{Arc, RwLock}, thread, time::SystemTime, usize};
+use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
 
 #[derive(Debug)]
 enum Resp {
@@ -39,18 +39,37 @@ fn is_digit(b: u8) -> bool {
     b >= b'0' && b <= b'9'
 }
 
-fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
+fn unsigned_number<'a, T>(pc: RespParseContext<'a>) -> RespParseResult<'a, T> where T: From<u8> + AddAssign<T> + MulAssign<T> + Mul<T, Output = T> {
     let input = &pc.content[pc.pos..];
     let digits = input.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
     if digits.is_empty() {
-        return Err(RespParseError { message: "no digits for usize value".to_string() });
+        return Err(RespParseError { message: "no digits for unsigned_number value".to_string() });
     }
-    let mut value: usize = 0;
+    let mut value: T = T::from(0);
     for (i, &&v) in digits.iter().enumerate() {
-        value += ((v - b'0') as usize) * (10 as usize).pow((digits.len() - i - 1).try_into().unwrap());
+        let d = T::from(v - b'0');
+        let n = digits.len() - i - 1;
+        let mut m = T::from(1);
+        for _ in 0..n {
+            m *= T::from(10);
+        }
+        value += d * m;
     }
     Ok((value, RespParseContext { pos: pc.pos + digits.len(), ..pc}))
 }
+
+// fn usize<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, usize> {
+//     let input = &pc.content[pc.pos..];
+//     let digits = input.iter().take_while(|&b| is_digit(*b)).collect::<Vec<_>>();
+//     if digits.is_empty() {
+//         return Err(RespParseError { message: "no digits for usize value".to_string() });
+//     }
+//     let mut value: usize = 0;
+//     for (i, &&v) in digits.iter().enumerate() {
+//         value += ((v - b'0') as usize) * (10 as usize).pow((digits.len() - i - 1).try_into().unwrap());
+//     }
+//     Ok((value, RespParseContext { pos: pc.pos + digits.len(), ..pc}))
+// }
 
 fn take<'a>(pc: RespParseContext<'a>, n: usize) -> RespParseResult<'a, &'a [u8]> {
     let input = &pc.content[pc.pos..];
@@ -83,7 +102,7 @@ fn parse_simple_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp
 
 fn parse_bulk_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
     let (_, rest) = tag(pc, &[b'$'])?;
-    let (l, rest) = usize(rest)?;
+    let (l, rest) = unsigned_number::<usize>(rest)?;
     let (_, rest) = tag(rest, &[b'\r', b'\n'])?;
     let (s, rest) = take(rest, l)?;
     let (_, rest) = tag(rest, &[b'\r', b'\n'])?;
@@ -93,7 +112,7 @@ fn parse_bulk_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> 
 
 fn parse_array<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
     let (_, rest) = tag(pc, &[b'*'])?;
-    let (l, rest) = usize(rest)?;
+    let (l, rest) = unsigned_number::<usize>(rest)?;
     let (_, rest) = tag(rest, &[b'\r', b'\n'])?;
 
     let mut elements: Vec<Resp> = Vec::new();
@@ -122,12 +141,14 @@ fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
  * Store
  */
 struct StoreValue {
-    t: Option<SystemTime>,
-    ttl: u64,
+    t: Instant,
+    ttl: Option<Duration>,
     value: Vec<u8>
 }
 
-type Store = HashMap<Vec<u8>, Vec<u8>>;
+type Store = HashMap<Vec<u8>, StoreValue>;
+
+
 /**
  * Process command
  */
@@ -146,23 +167,28 @@ fn process_ping(args: &[Resp]) -> Result<Resp, RespParseError> {
     }
 }
 
-fn process_set(args: &[Resp], store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError> {
+fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
     match args {
         [Resp::BulkString { value: key }, Resp::BulkString { value }] => {
-            let mut wstore = store.write().unwrap();
-            (*wstore).insert(key.to_vec(), value.to_vec());
+            let mut store = store.write().unwrap();
+            let value = StoreValue {
+                t: Instant::now(),
+                ttl: None,
+                value: value.to_vec()
+            };
+            (*store).insert(key.to_vec(), value);
             Ok(Resp::SimpleString { value: b"OK".to_vec() })
         },
         _ => Err(RespParseError { message: format!("Unsupported SET command shape: {:?}", args) })
     }
 }
 
-fn process_get(args: &[Resp], store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError> {
+fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
     match args {
         [Resp::BulkString { value: key }] => {
-            let rstore = store.read().unwrap();
-            match rstore.get(key) {
-                Some(value) => Ok(Resp::BulkString { value: value.to_vec() }),
+            let store = store.read().unwrap();
+            match store.get(key) {
+                Some(value) => Ok(Resp::BulkString { value: value.value.to_vec() }),
                 None => Ok(Resp::Null)
             }
         },
@@ -170,7 +196,7 @@ fn process_get(args: &[Resp], store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) ->
     }
 }
 
-fn process_command(input: Resp, store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError> {
+fn process_command(input: Resp, store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
     match input {
         Resp::Array { elements } => {
             match &elements[0] {
