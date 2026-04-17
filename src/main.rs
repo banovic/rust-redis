@@ -1,8 +1,9 @@
 #![allow(unused_imports)]
-use std::{error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, thread, usize};
+use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, sync::{Arc, RwLock}, thread, usize};
 
 #[derive(Debug)]
 enum Resp {
+    Null,
     SimpleString {
         value: Vec<u8>
     },
@@ -121,7 +122,7 @@ fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
 /**
  * Process command
  */
-fn process_command(input: Resp) -> Result<Resp, RespParseError>{
+fn process_command(input: Resp, store: &Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>) -> Result<Resp, RespParseError>{
     match input {
         Resp::Array { elements } => {
             match &elements[0] {
@@ -132,6 +133,18 @@ fn process_command(input: Resp) -> Result<Resp, RespParseError>{
                         (b"ECHO", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
                         (b"PING", [Resp::BulkString { value }]) => Ok(Resp::BulkString { value: value.to_vec() }),
                         (b"PING", _) => Ok(Resp::SimpleString { value: b"PONG".to_vec() }),
+                        (b"SET", [Resp::BulkString { value: key }, Resp::BulkString { value }]) => {
+                            let mut wstore = store.write().unwrap();
+                            (*wstore).insert(key.to_vec(), value.to_vec());
+                            Ok(Resp::SimpleString { value: b"OK".to_vec() })
+                        },
+                        (b"GET", [Resp::BulkString { value: key }]) => {
+                            let rstore = store.read().unwrap();
+                            match rstore.get(key) {
+                                Some(value) => Ok(Resp::BulkString { value: value.to_vec() }),
+                                None => Ok(Resp::Null)
+                            }
+                        },
                         _ => Err(RespParseError { message: format!("unsupported command or shape: {:?}", command)})
                     }
                 }
@@ -153,6 +166,9 @@ fn write_bytes(out: &mut Vec<u8>, bs: &[u8]) {
 
 fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
     match r {
+        Resp::Null => {
+            write_bytes(&mut out, &[b'_', b'\r', b'\n']);
+        },
         Resp::SimpleString { value } => {
             write_bytes(&mut out, &[b'+']);
             write_bytes(&mut out, &value[..]);
@@ -182,10 +198,12 @@ fn main() {
 
     // Uncomment the code below to pass the first stage
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let store = Arc::new(RwLock::new(HashMap::new()));
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
+                let store = Arc::clone(&store);//store.clone();
                 thread::spawn(move || {
                     println!("accepted new connection");
                     let mut buffer= [0u8; 1024];
@@ -195,7 +213,7 @@ fn main() {
                             break;
                         }
                         match parse_resp(RespParseContext { content: &buffer, pos: 0 }) {
-                            Ok((command, _)) => match process_command(command) {
+                            Ok((command, _)) => match process_command(command, &store) {
                                 Ok(resp) => {
                                     //println!("Response: {:?}", resp);
                                     let mut out = Vec::new();
