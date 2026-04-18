@@ -253,7 +253,7 @@ fn write_bytes(out: &mut Vec<u8>, bs: &[u8]) {
 fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
     match r {
         Resp::Null => {
-            write_bytes(&mut out, &[b'_', b'\r', b'\n']);
+            write_bytes(&mut out, &[b'$', b'-', b'1', b'\r', b'\n']);
         },
         Resp::SimpleString(value) => {
             write_bytes(&mut out, &[b'+']);
