@@ -4,15 +4,9 @@ use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Rea
 #[derive(Debug)]
 enum Resp {
     Null,
-    SimpleString {
-        value: Vec<u8>
-    },
-    BulkString {
-        value: Vec<u8>
-    },
-    Array {
-        elements: Vec<Resp>
-    }
+    SimpleString(Vec<u8>),
+    BulkString(Vec<u8>),
+    Array(Vec<Resp>)
 }
 
 #[derive(Debug,Clone)]
@@ -23,6 +17,11 @@ struct RespParseError {
 struct RespParseContext<'a> {
     content: &'a [u8],
     pos: usize
+}
+impl<'a> RespParseContext<'a> {
+    fn from_vec(content: &'a Vec<u8>) -> Self {
+        RespParseContext { content, pos: 0 }
+    }
 }
 
 type RespParseResult<'a, T> = Result<(T, RespParseContext<'a>), RespParseError>;
@@ -97,7 +96,7 @@ fn parse_simple_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp
     let (s, rest) = take_while(rest, &[b'\r', b'\n'])?;
     let (_, rest) = tag(rest, &[b'\r', b'\n'])?;
 
-    Ok((Resp::SimpleString { value: s.to_vec() }, rest))
+    Ok((Resp::SimpleString(s.to_vec()), rest))
 }
 
 fn parse_bulk_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
@@ -107,7 +106,7 @@ fn parse_bulk_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> 
     let (s, rest) = take(rest, l)?;
     let (_, rest) = tag(rest, &[b'\r', b'\n'])?;
 
-    Ok((Resp::BulkString { value: s.to_vec() }, rest))
+    Ok((Resp::BulkString(s.to_vec()), rest))
 }
 
 fn parse_array<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
@@ -123,7 +122,7 @@ fn parse_array<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
         elements.push(el);
     }
 
-    Ok((Resp::Array { elements }, new_rest))
+    Ok((Resp::Array(elements), new_rest))
 }
 
 fn parse_resp<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
@@ -154,22 +153,22 @@ type Store = HashMap<Vec<u8>, StoreValue>;
  */
 fn process_echo(args: &[Resp]) -> Result<Resp, RespParseError> {
     match args {
-        [Resp::BulkString { value }] => Ok(Resp::BulkString { value: value.to_vec() }),
+        [Resp::BulkString(value)] => Ok(Resp::BulkString(value.to_vec())),
         _ => Err(RespParseError { message: format!("Unsupported ECHO command shape: {:?}", args) })
     }
 }
 
 fn process_ping(args: &[Resp]) -> Result<Resp, RespParseError> {
     match args {
-        [Resp::BulkString { value }] => Ok(Resp::BulkString { value: value.to_vec() }),
-        [] => Ok(Resp::SimpleString { value: b"PONG".to_vec() }),
+        [Resp::BulkString(value)] => Ok(Resp::BulkString(value.to_vec())),
+        [] => Ok(Resp::SimpleString(b"PONG".to_vec())),
         _ => Err(RespParseError { message: format!("Unsupported PING command shape: {:?}", args) })
     }
 }
 
 fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
     match args {
-        [Resp::BulkString { value: key }, Resp::BulkString { value }] => {
+        [Resp::BulkString(key), Resp::BulkString(value)] => {
             let mut store = store.write().unwrap();
             let value = StoreValue {
                 t: Instant::now(),
@@ -177,7 +176,26 @@ fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespPa
                 value: value.to_vec()
             };
             (*store).insert(key.to_vec(), value);
-            Ok(Resp::SimpleString { value: b"OK".to_vec() })
+            Ok(Resp::SimpleString(b"OK".to_vec()))
+        },
+        [Resp::BulkString(key), Resp::BulkString(value), Resp::BulkString(expx), Resp::BulkString(ttl)] => {
+            let n = match unsigned_number::<u64>(RespParseContext::from_vec(ttl)) {
+                Ok((value, _)) => value,
+                Err(RespParseError { message }) => return Err(RespParseError { message: format!("Invalid time value for SET command: {:?}", message)})
+            };
+            let ttl = match &expx[..] {
+                b"EX" => Duration::from_secs(n),
+                b"PX" => Duration::from_millis(n),
+                _ => return Err(RespParseError { message: format!("Invalid time spec for SET (should be PX or EX): {:?}", expx) })
+            };
+            let mut store = store.write().unwrap();
+            let value = StoreValue {
+                t: Instant::now(),
+                ttl: Some(ttl),
+                value: value.to_vec()
+            };
+            (*store).insert(key.to_vec(), value);
+            Ok(Resp::SimpleString(b"OK".to_vec()))
         },
         _ => Err(RespParseError { message: format!("Unsupported SET command shape: {:?}", args) })
     }
@@ -185,10 +203,16 @@ fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespPa
 
 fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
     match args {
-        [Resp::BulkString { value: key }] => {
+        [Resp::BulkString(key)] => {
             let store = store.read().unwrap();
             match store.get(key) {
-                Some(value) => Ok(Resp::BulkString { value: value.value.to_vec() }),
+                Some(StoreValue{t, ttl, value}) => {
+                    match ttl {
+                        None => Ok(Resp::BulkString(value.to_vec())),
+                        Some(duration) if *t + *duration < Instant::now() => Ok(Resp::Null),
+                        Some(_) => Ok(Resp::BulkString(value.to_vec())),
+                    }
+                } 
                 None => Ok(Resp::Null)
             }
         },
@@ -198,12 +222,11 @@ fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespPa
 
 fn process_command(input: Resp, store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
     match input {
-        Resp::Array { elements } => {
+        Resp::Array(elements) => {
             match &elements[0] {
-                Resp::BulkString {value: command} => {
-                    let command = &command[..];
+                Resp::BulkString(command) => {
                     let args = &elements[1..];
-                    match command {
+                    match &command[..] {
                         b"ECHO" => process_echo(args),
                         b"PING" => process_ping(args),
                         b"SET" => process_set(args, store),
@@ -232,19 +255,19 @@ fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
         Resp::Null => {
             write_bytes(&mut out, &[b'_', b'\r', b'\n']);
         },
-        Resp::SimpleString { value } => {
+        Resp::SimpleString(value) => {
             write_bytes(&mut out, &[b'+']);
             write_bytes(&mut out, &value[..]);
             write_bytes(&mut out, &[b'\r', b'\n']);
         },
-        Resp::BulkString { value } => {
+        Resp::BulkString(value) => {
             write_bytes(&mut out, &[b'$']);
             write_usize(&mut out, value.len());
             write_bytes(&mut out, &[b'\r', b'\n']);
             write_bytes(&mut out, &value[..]);
             write_bytes(&mut out, &[b'\r', b'\n']);
         },
-        Resp::Array { elements } => {
+        Resp::Array(elements) => {
             write_bytes(&mut out, &[b'*']);
             write_usize(&mut out, elements.len());
             write_bytes(&mut out, &[b'\r', b'\n']);
