@@ -1,11 +1,14 @@
 #![allow(unused_imports)]
-use std::{collections::HashMap, error, fmt::format, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
+use std::{collections::HashMap, error, fmt::format, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
+
+type ByteString = Vec<u8>;
 
 #[derive(Debug)]
 enum Resp {
     Null,
     SimpleString(Vec<u8>),
     BulkString(Vec<u8>),
+    Integer(i64),
     Array(Vec<Resp>)
 }
 
@@ -147,6 +150,8 @@ struct StoreValue {
 
 type Store = HashMap<Vec<u8>, StoreValue>;
 
+type RedisList = Vec<ByteString>;
+type RedisListStore = HashMap<ByteString, RedisList>;
 
 /**
  * Process command
@@ -220,7 +225,25 @@ fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespPa
     }
 }
 
-fn process_command(input: Resp, store: &Arc<RwLock<Store>>) -> Result<Resp, RespParseError> {
+// Lists
+fn process_list_rpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
+    let (list_name, element) = match args {
+        [Resp::BulkString(key), Resp::BulkString(element)] => Ok((key, element)),
+        _ => Err(RespParseError { message: format!("Unsupported RPUSH command shape: {:?}",  args)})
+    }?;
+    let mut list_store = list_store.write().unwrap();
+    list_store.entry(list_name.to_vec()).and_modify(|e| e.push(element.to_vec())).or_insert(vec![element.to_vec()]);
+    
+    // Rest optional args
+    for el in &args[2..] {
+        if let Resp::BulkString(element) = el {
+            list_store.entry(list_name.to_vec()).and_modify(|e| e.push(element.to_vec()));
+        }
+    }
+    Ok(Resp::Integer(list_store.get(list_name).map_or(0, |l| l.len() as i64)))
+}
+
+fn process_command(input: Resp, store: &Arc<RwLock<Store>>, list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
     match input {
         Resp::Array(elements) => {
             match &elements[0] {
@@ -231,6 +254,8 @@ fn process_command(input: Resp, store: &Arc<RwLock<Store>>) -> Result<Resp, Resp
                         b"PING" => process_ping(args),
                         b"SET" => process_set(args, store),
                         b"GET" => process_get(args, store),
+                        // Lists
+                        b"RPUSH" => process_list_rpush(args, list_store),
                         _ => Err(RespParseError { message: format!("Unsupported command: {:?} with shape: {:?}", command, args)})
                     }
                 }
@@ -267,6 +292,11 @@ fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
             write_bytes(&mut out, &value[..]);
             write_bytes(&mut out, &[b'\r', b'\n']);
         },
+        Resp::Integer(n) => {
+            write_bytes(&mut out, &[b':']);
+            write_bytes(&mut out, n.to_string().as_bytes());
+            write_bytes(&mut out, &[b'\r', b'\n']);
+        },
         Resp::Array(elements) => {
             write_bytes(&mut out, &[b'*']);
             write_usize(&mut out, elements.len());
@@ -285,11 +315,13 @@ fn main() {
     // Uncomment the code below to pass the first stage
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
     let store = Arc::new(RwLock::new(HashMap::new()));
+    let list_store = Arc::new(RwLock::new(HashMap::new()));
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
                 let store = Arc::clone(&store);//store.clone();
+                let list_store = Arc::clone(&list_store);
                 thread::spawn(move || {
                     println!("accepted new connection");
                     let mut buffer= [0u8; 1024];
@@ -299,7 +331,7 @@ fn main() {
                             break;
                         }
                         match parse_resp(RespParseContext { content: &buffer, pos: 0 }) {
-                            Ok((command, _)) => match process_command(command, &store) {
+                            Ok((command, _)) => match process_command(command, &store, &list_store) {
                                 Ok(resp) => {
                                     //println!("Response: {:?}", resp);
                                     let mut out = Vec::new();
