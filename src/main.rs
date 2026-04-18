@@ -227,20 +227,24 @@ fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, RespPa
 
 // Lists
 fn process_list_rpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
-    let (list_name, element) = match args {
-        [Resp::BulkString(key), Resp::BulkString(element)] => Ok((key, element)),
-        _ => Err(RespParseError { message: format!("Unsupported RPUSH command shape: {:?}",  args)})
+    let name = match &args[0] {
+        Resp::BulkString(name) => Ok(name),
+        _ => Err(RespParseError { message: format!("Unsupported RPUSH command shape, missing list name: {:?}",  args)})
     }?;
-    let mut list_store = list_store.write().unwrap();
-    list_store.entry(list_name.to_vec()).and_modify(|e| e.push(element.to_vec())).or_insert(vec![element.to_vec()]);
-    
-    // Rest optional args
-    for el in &args[2..] {
+
+    let mut elements = Vec::new();
+
+    for el in &args[1..] {
         if let Resp::BulkString(element) = el {
-            list_store.entry(list_name.to_vec()).and_modify(|e| e.push(element.to_vec()));
+            elements.push(element.to_vec());
         }
     }
-    Ok(Resp::Integer(list_store.get(list_name).map_or(0, |l| l.len() as i64)))
+
+    let mut store = list_store.write().unwrap();
+
+    store.entry(name.to_vec()).and_modify(|e| e.append(&mut elements)).or_insert(elements);
+
+    Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
 }
 
 fn process_command(input: Resp, store: &Arc<RwLock<Store>>, list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
