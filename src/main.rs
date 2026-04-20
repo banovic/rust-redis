@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{collections::HashMap, error, fmt::format, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
+use std::{collections::HashMap, error, fmt::format, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign, Neg}, result, str::{FromStr, from_utf8}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
 
 type ByteString = Vec<u8>;
 
@@ -16,6 +16,8 @@ enum Resp {
 struct RespParseError {
     message: String
 }
+
+//
 #[derive(Debug,Clone,Copy)]
 struct RespParseContext<'a> {
     content: &'a [u8],
@@ -25,10 +27,132 @@ impl<'a> RespParseContext<'a> {
     fn from_vec(content: &'a Vec<u8>) -> Self {
         RespParseContext { content, pos: 0 }
     }
+
+    fn input(&self) -> &'a [u8] {
+        &self.content[self.pos..]
+    }
+
+    fn forward(&self, n: usize) -> Self {
+        RespParseContext { content: self.content, pos: self.pos + n }
+    }
+}
+///
+type RespParseResult<'a, T> = Result<(T, RespParseContext<'a>), RespParseError>;
+///
+trait Parser<'a, T> {
+    fn parse(&self, pc: RespParseContext<'a>) -> RespParseResult<'a, T>;
 }
 
-type RespParseResult<'a, T> = Result<(T, RespParseContext<'a>), RespParseError>;
+impl<'a, T, F> Parser<'a, T> for F
+where
+    F: Fn(RespParseContext<'a>) -> RespParseResult<'a, T>
+{
+    fn parse(&self, pc: RespParseContext<'a>) -> RespParseResult<'a, T> {
+        self(pc)
+    }
+}
+///
+/// Read `b` byte by value.
+fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
+    move |pc: RespParseContext<'a>| match pc.input().len() > 0 && pc.input()[0] == b {
+        true => Ok((b, pc.forward(1))),
+        _ => Err(RespParseError { message: format!("no byte: {:?} found", b) })
+    }
+}
 
+///
+/// Read `tag` bytes by value.
+fn tag2<'a>(tag: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
+    move |pc: RespParseContext<'a>| {
+        match pc.input().starts_with(tag) {
+            true => Ok((tag, pc.forward(tag.len()))),
+            _ => Err(RespParseError { message: format!("no tag: {:?} found", tag) })
+        }
+    }
+}
+
+/// Read `n` bytes.
+fn take2<'a>(n: usize) -> impl Parser<'a, &'a [u8]> {
+    move |pc: RespParseContext<'a>| {
+        if pc.input().len() < n {
+            return Err(RespParseError { message: format!("expected {} bytes, got {}", n, pc.input().len()) });
+        }
+        let (head, _) = pc.input().split_at(n);
+        Ok((head, pc.forward(head.len())))
+    }
+}
+
+/// Read all bytes while predicate `pred` returns true.
+fn take_while2<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
+    move |pc: RespParseContext<'a>| {
+        let digits_len = pc.content.iter().take_while(|&&b| pred(b)).count();
+        if digits_len == 0 {
+            return Err(RespParseError { message: format!("expected to match at least one byte, but matched 0") })
+        }
+        let (digits, _) = pc.content.split_at(pc.pos + digits_len);
+        Ok((digits, pc.forward(digits_len)))
+    }
+}
+
+/// `or` combinator, it succeeds if `p1` or `p2` succeeds.
+fn or<'a, T>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
+    move |pc: RespParseContext<'a>| match p1.parse(pc) {
+        Ok(result) => Ok(result),
+        _ => p2.parse(pc)
+    }
+}
+
+/// `and` combinator, it succeeds when `p1` matches and then `p2` matches.
+fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<'a, (A, B)> {
+    move |pc: RespParseContext<'a>| {
+        let (a, rest) = p1.parse(pc)?;
+        let (b, rest) = p2.parse(rest)?;
+        Ok(((a, b), rest))
+    }
+}
+
+/// `opt` combinator, it always succeeds. If it matches input is advanced.
+fn opt<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
+    move |pc: RespParseContext<'a>| match p.parse(pc) {
+        Ok((result, rest)) => Ok((Some(result), rest)),
+        _ => Ok((None, pc))
+    }
+}
+
+fn unsigned_integer<'a, T>() -> impl Parser<'a, T>
+where
+    T: FromStr
+{
+    move |pc: RespParseContext<'a>| {
+        let digits_parser = take_while2(|b| b.is_ascii_digit());
+        let ((_, digits), rest) = and(opt(byte(b'+')), digits_parser).parse(pc)?;
+        // Ok, since digits are ASCII
+        let s = from_utf8(digits).unwrap();
+        let n = match s.parse::<T>() {
+            Ok(v) => Ok(v),
+            _ => Err(RespParseError { message: format!("cannot parse digits from string: {}", s) })
+        }?;
+        Ok((n, rest))
+    }
+}
+
+fn signed_integer<'a, T>(pc: RespParseContext<'a>) -> RespParseResult<'a, T> where T: Neg<Output = T> + FromStr {
+    let digits_parser = take_while2(|b| b.is_ascii_digit());
+    let ((sign, digits), rest) = and(opt(byte(b'-')), digits_parser).parse(pc)?;
+    // Ok, since digits are ASCII
+    let s = from_utf8(digits).unwrap();
+    let n = match s.parse::<T>() {
+        Ok(v) => Ok(v),
+        _ => Err(RespParseError { message: format!("cannot parse digits from string: {}", s) })
+    }?;
+    let n = match sign {
+        Some(b'-') => n.neg(),
+        _ => n
+    };
+    Ok((n, rest))
+}
+
+///
 fn tag<'a>(pc: RespParseContext<'a>, tag: &'static [u8]) -> RespParseResult<'a, &'a [u8]> {
     let input = &pc.content[pc.pos..];
     if input.starts_with(tag) {
@@ -94,6 +218,7 @@ fn take_while<'a>(pc: RespParseContext<'a>, needle: &'static [u8]) -> RespParseR
     Err(RespParseError { message: format!("expected to match needle: {:?}, but haven't", needle) })
 }
 
+/// Parse client request:
 fn parse_simple_string<'a>(pc: RespParseContext<'a>) -> RespParseResult<'a, Resp> {
     let (_, rest) = tag(pc, &[b'+'])?;
     let (s, rest) = take_while(rest, &[b'\r', b'\n'])?;
@@ -247,6 +372,68 @@ fn process_list_rpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -
     Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
 }
 
+fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
+    let (name, start, stop) = match args {
+        [Resp::BulkString(name), Resp::BulkString(start), Resp::BulkString(stop)] => {
+            let (start, _) = unsigned_integer::<i32>().parse(RespParseContext::from_vec(start))?;
+            let (stop, _) = unsigned_integer::<i32>().parse(RespParseContext::from_vec(stop))?;
+            Ok((name, start, stop))
+        },
+        _ => Err(RespParseError { message: format!("Unsupported LRANGE command shape: {:?}", args) })
+    }?;
+
+    let mut result = Vec::new();
+    let store = list_store.read().unwrap();
+    let list_option = store.get(name);
+    if list_option.is_none() {
+        return Ok(Resp::Array(result));
+    }
+    let list = list_option.unwrap();
+    if start > (list.len() as i32) || start > stop {
+        return Ok(Resp::Array(result));
+    }
+    let a = match start < 0 {
+        true => 0,
+        _ => start as usize
+    };
+    let b = match stop > (list.len() as i32) {
+        true => list.len(),
+        _ => stop as usize
+    };
+    for i in a..b {
+        result.push(Resp::BulkString(list[i].to_vec()));
+    }
+    Ok(Resp::Array(result))
+    //panic!()
+    // let (name, start, stop) = match args {
+    //     [Resp::BulkString(name), Resp::BulkString(start), Resp::BulkString(stop)] => {
+    //         //Ok(name, )
+    //         panic!()
+    //     },
+    //     _ => Err(RespParseError { message: format!("Unsupported LRANGE command shape: {:?}", args) })
+    // }?;
+    // let name = match &args[0] {
+    //     Resp::BulkString(name) => Ok(name),
+    //     _ => Err(RespParseError { message: format!("Unsupported RPUSH command shape, missing list name: {:?}",  args)})
+    // }?;
+
+    // let mut elements = Vec::new();
+
+    // for el in &args[1..] {
+    //     if let Resp::BulkString(element) = el {
+    //         elements.push(element.to_vec());
+    //     }
+    // }
+
+    // let mut store = list_store.write().unwrap();
+
+    // store.entry(name.to_vec()).and_modify(|e| e.append(&mut elements)).or_insert(elements);
+
+    // Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
+}
+
+
+
 fn process_command(input: Resp, store: &Arc<RwLock<Store>>, list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
     match input {
         Resp::Array(elements) => {
@@ -260,6 +447,7 @@ fn process_command(input: Resp, store: &Arc<RwLock<Store>>, list_store: &Arc<RwL
                         b"GET" => process_get(args, store),
                         // Lists
                         b"RPUSH" => process_list_rpush(args, list_store),
+                        b"LRANGE" => process_list_lrange(args, list_store),
                         _ => Err(RespParseError { message: format!("Unsupported command: {:?} with shape: {:?}", command, args)})
                     }
                 }
