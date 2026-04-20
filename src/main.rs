@@ -97,13 +97,15 @@ fn take_while2<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
 }
 
 /// `or` combinator, it succeeds if `p1` or `p2` succeeds.
-fn or<'a, T>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
+fn or<'a, T: Debug>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
     move |pc: RespParseContext<'a>| {
                 println!("or, pc: {:?}", pc);
-match p1.parse(pc) {
+let x = match p1.parse(pc) {
         Ok(result) => Ok(result),
         _ => p2.parse(pc)
-    }
+    };
+               println!("or, out: {:?}", x);
+    x
 }
 }
 
