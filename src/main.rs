@@ -375,8 +375,8 @@ fn process_list_rpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -
 fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
     let (name, start, stop) = match args {
         [Resp::BulkString(name), Resp::BulkString(start), Resp::BulkString(stop)] => {
-            let (start, _) = unsigned_integer::<i32>().parse(RespParseContext::from_vec(start))?;
-            let (stop, _) = unsigned_integer::<i32>().parse(RespParseContext::from_vec(stop))?;
+            let (start, _) = signed_integer::<i32>().parse(RespParseContext::from_vec(start))?;
+            let (stop, _) = signed_integer::<i32>().parse(RespParseContext::from_vec(stop))?;
             Ok((name, start, stop))
         },
         _ => Err(RespParseError { message: format!("Unsupported LRANGE command shape: {:?}", args) })
