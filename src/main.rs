@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{collections::HashMap, error, fmt::format, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign, Neg}, result, str::{FromStr, from_utf8}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
+use std::{collections::HashMap, error, fmt::{Debug, format}, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign, Neg}, result, str::{FromStr, from_utf8}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
 
 type ByteString = Vec<u8>;
 
@@ -118,14 +118,16 @@ fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<
 }
 
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
-fn opt<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
+fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
     move |pc: RespParseContext<'a>| {
                 println!("opt, pc: {:?}", pc);
-match p.parse(pc) {
+let x = match p.parse(pc) {
         Ok((result, rest)) => Ok((Some(result), rest)),
         _ => Ok((None, pc))
+    };
+                println!("opt, out: {:?}", &x);
+    x
     }
-}
 }
 
 fn unsigned_integer<'a, T>() -> impl Parser<'a, T>
