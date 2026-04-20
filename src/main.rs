@@ -85,6 +85,8 @@ fn take2<'a>(n: usize) -> impl Parser<'a, &'a [u8]> {
 /// Read all bytes while predicate `pred` returns true.
 fn take_while2<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
     move |pc: RespParseContext<'a>| {
+                        println!("digits, pc: {:?}", pc);
+
         let digits_len = pc.input().iter().take_while(|&&b| pred(b)).count();
         if digits_len == 0 {
             return Err(RespParseError { message: format!("expected to match at least one byte, but matched 0; pc = {:?}", pc) })
@@ -96,15 +98,19 @@ fn take_while2<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
 
 /// `or` combinator, it succeeds if `p1` or `p2` succeeds.
 fn or<'a, T>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
-    move |pc: RespParseContext<'a>| match p1.parse(pc) {
+    move |pc: RespParseContext<'a>| {
+                println!("or, pc: {:?}", pc);
+match p1.parse(pc) {
         Ok(result) => Ok(result),
         _ => p2.parse(pc)
     }
+}
 }
 
 /// `and` combinator, it succeeds when `p1` matches and then `p2` matches.
 fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<'a, (A, B)> {
     move |pc: RespParseContext<'a>| {
+                println!("and, pc: {:?}", pc);
         let (a, rest) = p1.parse(pc)?;
         let (b, rest) = p2.parse(rest)?;
         Ok(((a, b), rest))
@@ -114,7 +120,7 @@ fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
 fn opt<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
     move |pc: RespParseContext<'a>| {
-                println!("signed_integer, pc: {:?}", pc);
+                println!("opt, pc: {:?}", pc);
 match p.parse(pc) {
         Ok((result, rest)) => Ok((Some(result), rest)),
         _ => Ok((None, pc))
@@ -146,7 +152,11 @@ where
     move |pc: RespParseContext<'a>| {
         println!("signed_integer, pc: {:?}", pc);
         let digits_parser = take_while2(|b| b.is_ascii_digit());
-        let ((sign, digits), rest) = and(opt(or(byte(b'-'), byte(b'+'))), digits_parser).parse(pc)?;
+        let ((sign, digits), rest) = and(
+            opt(or(byte(b'-'), byte(b'+'))),
+            digits_parser
+        ).parse(pc)?;
+        println!("signed_integer, sign: {:?}, digits = {:?}, rest: {:?}", sign, digits, rest);
         // Ok, since digits are ASCII
         let s = from_utf8(digits).unwrap();
         let n = match s.parse::<T>() {
