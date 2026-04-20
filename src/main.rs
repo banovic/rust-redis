@@ -385,7 +385,7 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
         },
         _ => Err(RespParseError { message: format!("Unsupported LRANGE command shape: {:?}", args) })
     }?;
-print!("start: {}, stop: {}", start, stop);
+println!("start: {}, stop: {}", start, stop);
 
     let mut result = Vec::new();
     let store = list_store.read().unwrap();
