@@ -385,6 +385,7 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
         },
         _ => Err(RespParseError { message: format!("Unsupported LRANGE command shape: {:?}", args) })
     }?;
+print!("start: {}, stop: {}", start, stop);
 
     let mut result = Vec::new();
     let store = list_store.read().unwrap();
@@ -393,6 +394,7 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
         return Ok(Resp::Array(result));
     }
     let list = list_option.unwrap();
+
     if start > (list.len() as i32) || start > stop {
         return Ok(Resp::Array(result));
     }
@@ -402,7 +404,6 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
     } else {
         start as usize
     };
-print!("start: {}, stop: {}", start, stop);
     let b = if stop > (list.len() as i32 - 1) {
         list.len() - 1
     } else if stop < 0 {
