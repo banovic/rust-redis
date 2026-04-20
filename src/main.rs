@@ -402,11 +402,11 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
     } else {
         start as usize
     };
-
+print!("start: {}, stop: {}", start, stop);
     let b = if stop > (list.len() as i32 - 1) {
         list.len() - 1
     } else if stop < 0 {
-        list.len() - 1 - stop.abs() as usize
+        list.len() - stop.abs() as usize
     } else {
         stop as usize
     };
