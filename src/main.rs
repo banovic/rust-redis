@@ -113,10 +113,13 @@ fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<
 
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
 fn opt<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
-    move |pc: RespParseContext<'a>| match p.parse(pc) {
+    move |pc: RespParseContext<'a>| {
+                println!("signed_integer, pc: {:?}", pc);
+match p.parse(pc) {
         Ok((result, rest)) => Ok((Some(result), rest)),
         _ => Ok((None, pc))
     }
+}
 }
 
 fn unsigned_integer<'a, T>() -> impl Parser<'a, T>
@@ -141,6 +144,7 @@ where
     T: Neg<Output = T> + FromStr
 {
     move |pc: RespParseContext<'a>| {
+        println!("signed_integer, pc: {:?}", pc);
         let digits_parser = take_while2(|b| b.is_ascii_digit());
         let ((sign, digits), rest) = and(opt(or(byte(b'-'), byte(b'+'))), digits_parser).parse(pc)?;
         // Ok, since digits are ASCII
