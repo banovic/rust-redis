@@ -147,7 +147,7 @@ where
 
 fn signed_integer<'a, T>() -> impl Parser<'a, T>
 where
-    T: Neg<Output = T> + FromStr
+    T: FromStr + Mul<Output = T> + From<i8>
 {
     move |pc: RespParseContext<'a>| {
         println!("signed_integer, pc: {:?}", pc);
@@ -164,7 +164,7 @@ where
             _ => Err(RespParseError { message: format!("cannot parse digits from string: {}", s) })
         }?;
         let n = match sign {
-            Some(b'-') => n.neg(),
+            Some(b'-') => n * T::from(-1),
             _ => n
         };
         Ok((n, rest))
