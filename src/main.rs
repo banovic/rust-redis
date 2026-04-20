@@ -87,7 +87,7 @@ fn take_while2<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
     move |pc: RespParseContext<'a>| {
         let digits_len = pc.content.iter().take_while(|&&b| pred(b)).count();
         if digits_len == 0 {
-            return Err(RespParseError { message: format!("expected to match at least one byte, but matched 0") })
+            return Err(RespParseError { message: format!("expected to match at least one byte, but matched 0; pc = {:?}", pc) })
         }
         let (digits, _) = pc.content.split_at(pc.pos + digits_len);
         Ok((digits, pc.forward(digits_len)))
@@ -142,7 +142,7 @@ where
 {
     move |pc: RespParseContext<'a>| {
         let digits_parser = take_while2(|b| b.is_ascii_digit());
-        let ((sign, digits), rest) = and(opt(byte(b'-')), digits_parser).parse(pc)?;
+        let ((sign, digits), rest) = and(opt(or(byte(b'-'), byte(b'+'))), digits_parser).parse(pc)?;
         // Ok, since digits are ASCII
         let s = from_utf8(digits).unwrap();
         let n = match s.parse::<T>() {
