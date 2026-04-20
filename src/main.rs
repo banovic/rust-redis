@@ -136,22 +136,26 @@ where
     }
 }
 
-fn signed_integer<'a, T>(pc: RespParseContext<'a>) -> RespParseResult<'a, T> where T: Neg<Output = T> + FromStr {
-    let digits_parser = take_while2(|b| b.is_ascii_digit());
-    let ((sign, digits), rest) = and(opt(byte(b'-')), digits_parser).parse(pc)?;
-    // Ok, since digits are ASCII
-    let s = from_utf8(digits).unwrap();
-    let n = match s.parse::<T>() {
-        Ok(v) => Ok(v),
-        _ => Err(RespParseError { message: format!("cannot parse digits from string: {}", s) })
-    }?;
-    let n = match sign {
-        Some(b'-') => n.neg(),
-        _ => n
-    };
-    Ok((n, rest))
+fn signed_integer<'a, T>() -> impl Parser<'a, T>
+where
+    T: Neg<Output = T> + FromStr
+{
+    move |pc: RespParseContext<'a>| {
+        let digits_parser = take_while2(|b| b.is_ascii_digit());
+        let ((sign, digits), rest) = and(opt(byte(b'-')), digits_parser).parse(pc)?;
+        // Ok, since digits are ASCII
+        let s = from_utf8(digits).unwrap();
+        let n = match s.parse::<T>() {
+            Ok(v) => Ok(v),
+            _ => Err(RespParseError { message: format!("cannot parse digits from string: {}", s) })
+        }?;
+        let n = match sign {
+            Some(b'-') => n.neg(),
+            _ => n
+        };
+        Ok((n, rest))
+    }
 }
-
 ///
 fn tag<'a>(pc: RespParseContext<'a>, tag: &'static [u8]) -> RespParseResult<'a, &'a [u8]> {
     let input = &pc.content[pc.pos..];
