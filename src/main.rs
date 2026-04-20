@@ -397,7 +397,7 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
         _ => start as usize
     };
     let b = match stop > (list.len() as i32) {
-        true => list.len(),
+        true => list.len() - 1,
         _ => stop as usize
     };
     for i in a..=b {
