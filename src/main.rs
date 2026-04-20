@@ -163,10 +163,10 @@ where
             Ok(v) => Ok(v),
             _ => Err(RespParseError { message: format!("cannot parse digits from string: {}", s) })
         }?;
-        let n = match sign {
-            Some(b'-') => n * T::from(-1),
-            _ => n
-        };
+        // let n = match sign {
+        //     Some(b'-') => n * T::from(-1),
+        //     _ => n
+        // };
         Ok((n, rest))
     }
 }
