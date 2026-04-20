@@ -396,16 +396,19 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
     if start > (list.len() as i32) || start > stop {
         return Ok(Resp::Array(result));
     }
-    let a = match start < 0 {
-        true => 0,
-        _ => start as usize
+    
+    let a = if start < 0 {
+        0
+    } else {
+        start as usize
     };
-    let b = match stop > (list.len() as i32) {
-        true => list.len() - 1,
-        _ => match stop < 0 {
-            true => (((list.len() as i32) - 1) + stop) as usize,
-            _ => stop as usize,
-        }
+
+    let b = if stop > (list.len() as i32 - 1) {
+        list.len() - 1
+    } else if stop < 0 {
+        list.len() - 1 + stop.abs() as usize
+    } else {
+        stop as usize
     };
     for i in a..=b {
         result.push(Resp::BulkString(list[i].to_vec()));
