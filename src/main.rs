@@ -85,7 +85,7 @@ fn take2<'a>(n: usize) -> impl Parser<'a, &'a [u8]> {
 /// Read all bytes while predicate `pred` returns true.
 fn take_while2<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
     move |pc: RespParseContext<'a>| {
-        let digits_len = pc.content.iter().take_while(|&&b| pred(b)).count();
+        let digits_len = pc.input().iter().take_while(|&&b| pred(b)).count();
         if digits_len == 0 {
             return Err(RespParseError { message: format!("expected to match at least one byte, but matched 0; pc = {:?}", pc) })
         }
