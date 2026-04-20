@@ -400,7 +400,7 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
         true => list.len(),
         _ => stop as usize
     };
-    for i in a..b {
+    for i in a..=b {
         result.push(Resp::BulkString(list[i].to_vec()));
     }
     Ok(Resp::Array(result))
