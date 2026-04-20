@@ -402,7 +402,10 @@ fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) 
     };
     let b = match stop > (list.len() as i32) {
         true => list.len() - 1,
-        _ => stop as usize
+        _ => match stop < 0 {
+            true => (((list.len() as i32) - 1) + stop) as usize,
+            _ => stop as usize,
+        }
     };
     for i in a..=b {
         result.push(Resp::BulkString(list[i].to_vec()));
