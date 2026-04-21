@@ -416,8 +416,13 @@ println!("start: {}, stop: {}", start, stop);
     // if start > (list.len() as i32) || start > stop {
     //     return Ok(Resp::Array(result));
     // }
-    
-    let a = 0.max(start);
+    let a = if start < 0 {
+        start + list.len() as i32
+    } else {
+        start
+    };
+    let a = 0.max(a);
+
     let b = if stop < 0 {
         stop + list.len() as i32
     } else {
