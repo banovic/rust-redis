@@ -442,6 +442,46 @@ fn process_list_llen(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) ->
     Ok(Resp::Integer(l as i64))
 }
 
+fn process_list_lpop(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
+    let (name, count) = match args {
+        [Resp::BulkString(name)] => Ok((name, None)),
+        [Resp::BulkString(name), Resp::BulkString(count)] => {
+            //let (count, _) = unsigned_integer::<u32>().parse(RespParseContext::from_vec(count))?;
+            match unsigned_integer::<u32>().parse(RespParseContext::from_vec(count))? {
+                (c, _) => Ok((name, Some(c))),
+                _ => Err(RespParseError { message: format!("Invalid count param spec: {:?}", args) })
+            }
+        }
+        _ => Err(RespParseError { message: format!("Unsupported LLEN command shape, missing list name: {:?}",  args)})
+    }?;
+
+    let mut store = list_store.write().unwrap();
+    let list = store.get_mut(name);
+    if list.is_none() {
+        return Ok(Resp::Null);
+    }
+    let mut list = list.unwrap();
+    if list.is_empty() {
+        return Ok(Resp::Null);
+    }
+    match count {
+        None => {
+            let el = list.pop_front().unwrap();
+            Ok(Resp::BulkString(el))
+        },
+        Some(count) => {
+            let mut result = Vec::new();
+            for _ in 0..count {
+                match list.pop_front() {
+                    Some(el) => result.push(Resp::BulkString(el)),
+                    None => return Ok(Resp::Array(result))
+                }
+            }
+            Ok(Resp::Array(result))
+        }
+    }
+}
+
 fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
     let (name, start, stop) = match args {
         [Resp::BulkString(name), Resp::BulkString(start), Resp::BulkString(stop)] => {
@@ -532,6 +572,7 @@ fn process_command(input: Resp, store: &Arc<RwLock<Store>>, list_store: &Arc<RwL
                         b"LRANGE" => process_list_lrange(args, list_store),
                         b"LPUSH" => process_list_lpush(args, list_store),
                         b"LLEN" => process_list_llen(args, list_store),
+                        b"LPOP" => process_list_lpop(args, list_store),
                         _ => Err(RespParseError { message: format!("Unsupported command: {:?} with shape: {:?}", command, args)})
                     }
                 }
