@@ -418,6 +418,11 @@ println!("start: {}, stop: {}", start, stop);
     // }
     
     let a = 0.max(start);
+    let b = if stop < 0 {
+        stop + list.len() as i32
+    } else {
+        stop
+    };
     let b = (list.len() as i32 - 1).min(stop);
 
     if a > b {
