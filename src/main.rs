@@ -425,7 +425,7 @@ println!("start: {}, stop: {}", start, stop);
     let b = if stop > (list.len() as i32 - 1) {
         list.len() - 1
     } else if stop < 0 {
-        list.len() - stop.abs() as usize
+        list.len() - stop as usize
     } else {
         stop as usize
     };
