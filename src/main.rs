@@ -413,23 +413,18 @@ println!("start: {}, stop: {}", start, stop);
     }
     let list = list_option.unwrap();
 
-    if start > (list.len() as i32) || start > stop {
+    // if start > (list.len() as i32) || start > stop {
+    //     return Ok(Resp::Array(result));
+    // }
+    
+    let a = 0.max(start);
+    let b = (list.len() as i32 - 1).min(stop);
+
+    if a > b {
         return Ok(Resp::Array(result));
     }
-    
-    let a = if start < 0 {
-        0
-    } else {
-        start as usize
-    };
-    let b = if stop > (list.len() as i32 - 1) {
-        list.len() - 1
-    } else if stop < 0 {
-        list.len() - stop as usize
-    } else {
-        stop as usize
-    };
-    for i in a..=b {
+
+    for i in (a as usize)..=(b as usize) {
         result.push(Resp::BulkString(list[i].to_vec()));
     }
     Ok(Resp::Array(result))
