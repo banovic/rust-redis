@@ -423,7 +423,7 @@ println!("start: {}, stop: {}", start, stop);
     } else {
         stop
     };
-    let b = (list.len() as i32 - 1).min(stop);
+    let b = (list.len() as i32 - 1).min(b);
 
     if a > b {
         return Ok(Resp::Array(result));
