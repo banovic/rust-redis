@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use std::{collections::HashMap, error, fmt::{Debug, format}, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign, Neg}, result, str::{FromStr, from_utf8}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
+use std::{collections::{HashMap, VecDeque}, error, fmt::{Debug, format}, hash::Hash, io::{BufRead, BufReader, Read, Write}, net::TcpListener, ops::{AddAssign, Mul, MulAssign, Neg}, result, str::{FromStr, from_utf8}, sync::{Arc, RwLock}, thread, time::{Duration, Instant, SystemTime}, usize};
 
 type ByteString = Vec<u8>;
 
@@ -297,7 +297,7 @@ struct StoreValue {
 
 type Store = HashMap<Vec<u8>, StoreValue>;
 
-type RedisList = Vec<ByteString>;
+type RedisList = VecDeque<ByteString>;
 type RedisListStore = HashMap<ByteString, RedisList>;
 
 /**
@@ -379,11 +379,11 @@ fn process_list_rpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -
         _ => Err(RespParseError { message: format!("Unsupported RPUSH command shape, missing list name: {:?}",  args)})
     }?;
 
-    let mut elements = Vec::new();
+    let mut elements = VecDeque::new();
 
     for el in &args[1..] {
         if let Resp::BulkString(element) = el {
-            elements.push(element.to_vec());
+            elements.push_back(element.to_vec());
         }
     }
 
