@@ -394,6 +394,40 @@ fn process_list_rpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -
     Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
 }
 
+fn process_list_lpush(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
+    let name = match &args[0] {
+        Resp::BulkString(name) => Ok(name),
+        _ => Err(RespParseError { message: format!("Unsupported RPUSH command shape, missing list name: {:?}",  args)})
+    }?;
+
+    let mut store = list_store.write().unwrap();
+    let mut list = store.get_mut(name).unwrap_or(&mut VecDeque::new());
+    store.entry(name.to_vec()).and_modify(|e| {
+        for el in &args[1..] {
+            if let Resp::BulkString(element) = el {
+                (*e).push_front(element.to_vec());
+            }
+        }
+    }).or_insert_with(|| {
+        let mut l = VecDeque::new();
+        for el in &args[1..] {
+            if let Resp::BulkString(element) = el {
+                l.push_front(element.to_vec());
+            }
+        }
+        l
+    });
+    // for el in &args[1..] {
+    //     if let Resp::BulkString(element) = el {
+    //         list.push_front(element.to_vec());
+    //     }
+    // }
+
+    // store.entry(name.to_vec()).insert_entry(list);
+
+    Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
+}
+
 fn process_list_lrange(args: &[Resp], list_store: &Arc<RwLock<RedisListStore>>) -> Result<Resp, RespParseError> {
     let (name, start, stop) = match args {
         [Resp::BulkString(name), Resp::BulkString(start), Resp::BulkString(stop)] => {
@@ -482,6 +516,7 @@ fn process_command(input: Resp, store: &Arc<RwLock<Store>>, list_store: &Arc<RwL
                         // Lists
                         b"RPUSH" => process_list_rpush(args, list_store),
                         b"LRANGE" => process_list_lrange(args, list_store),
+                        b"LPUSH" => process_list_lpush(args, list_store),
                         _ => Err(RespParseError { message: format!("Unsupported command: {:?} with shape: {:?}", command, args)})
                     }
                 }
