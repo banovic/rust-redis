@@ -273,6 +273,10 @@ where
         println!("[in][unsigned_integer][pos: {}]", pc.pos);
         let digits_parser = take_while2(|b| b.is_ascii_digit());
         let ((_, digits), rest) = and(opt(byte(b'+')), digits_parser).parse(pc)?;
+        println!(
+            "[out][unsigned_integer][pos: {}][digits: {:?}]",
+            rest.pos, &digits
+        );
         // Ok, since digits are ASCII
         let s = from_utf8(digits).unwrap();
         let n = match s.parse::<T>() {
