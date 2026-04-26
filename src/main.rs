@@ -270,6 +270,7 @@ where
     T: FromStr,
 {
     move |pc: ParseContext<'a>| {
+        println!("[in][unsigned_integer][pos: {}]", pc.pos);
         let digits_parser = take_while2(|b| b.is_ascii_digit());
         let ((_, digits), rest) = and(opt(byte(b'+')), digits_parser).parse(pc)?;
         // Ok, since digits are ASCII
@@ -280,6 +281,7 @@ where
                 message: format!("cannot parse digits from string: {}", s),
             }),
         }?;
+        println!("[out][unsigned_integer][pos: {}]", rest.pos);
         Ok((n, rest))
     }
 }
