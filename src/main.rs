@@ -86,7 +86,9 @@ fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
                 message: format!("no byte: {:?} found", b),
             }),
         };
-        println!("[l:{}][byte][OUT] b: {}", x.as_ref().unwrap().1.pos, b);
+        if x.is_ok() {
+            println!("[l:{}][byte][OUT] b: {}", x.as_ref().unwrap().1.pos, b);
+        }
         x
     }
 }
