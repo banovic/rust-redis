@@ -149,12 +149,12 @@ fn take_until<'a>(limit: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
 /// `or` combinator, it succeeds if `p1` or `p2` succeeds.
 fn or<'a, T: Debug>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
     move |pc: ParseContext<'a>| {
-        println!("or, pc: {:?}", pc);
+        //println!("or, pc: {:?}", pc);
         let x = match p1.parse(pc) {
             Ok(result) => Ok(result),
             _ => p2.parse(pc),
         };
-        println!("or, out: {:?}", x);
+        //println!("or, out: {:?}", x);
         x
     }
 }
@@ -162,7 +162,7 @@ fn or<'a, T: Debug>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Pars
 /// `and` combinator, it succeeds when `p1` matches and then `p2` matches.
 fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<'a, (A, B)> {
     move |pc: ParseContext<'a>| {
-        println!("and, pc: {:?}", pc);
+        //println!("and, pc: {:?}", pc);
         let (a, rest) = p1.parse(pc)?;
         let (b, rest) = p2.parse(rest)?;
         Ok(((a, b), rest))
@@ -172,7 +172,7 @@ fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<
 macro_rules! and {
     ($p1: expr, $p2: expr $(,)?) => {
         move |pc: ParseContext<'a>| {
-            println!("and, pc: {:?}", pc);
+            //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
             let (b, rest) = $p2.parse(rest)?;
             Ok(((a, b), rest))
@@ -181,7 +181,7 @@ macro_rules! and {
 
     ($p1: expr, $p2: expr, $p3: expr $(,)?) => {
         move |pc: ParseContext<'a>| {
-            println!("and, pc: {:?}", pc);
+            //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
             let (b, rest) = $p2.parse(rest)?;
             let (c, rest) = $p3.parse(rest)?;
@@ -191,7 +191,7 @@ macro_rules! and {
 
     ($p1: expr, $p2: expr, $p3: expr, $p4: expr $(,)?) => {
         move |pc: ParseContext<'a>| {
-            println!("and, pc: {:?}", pc);
+            //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
             let (b, rest) = $p2.parse(rest)?;
             let (c, rest) = $p3.parse(rest)?;
@@ -202,7 +202,7 @@ macro_rules! and {
 
     ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr $(,)?) => {
         move |pc: ParseContext<'a>| {
-            println!("and, pc: {:?}", pc);
+            //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
             let (b, rest) = $p2.parse(rest)?;
             let (c, rest) = $p3.parse(rest)?;
@@ -214,7 +214,7 @@ macro_rules! and {
 
     ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr, $p6: expr $(,)?) => {
         move |pc: ParseContext<'a>| {
-            println!("and, pc: {:?}", pc);
+            //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
             let (b, rest) = $p2.parse(rest)?;
             let (c, rest) = $p3.parse(rest)?;
@@ -227,7 +227,7 @@ macro_rules! and {
 
     ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr, $p6: expr, $p7: expr $(,)?) => {
         move |pc: ParseContext<'a>| {
-            println!("and, pc: {:?}", pc);
+            //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
             let (b, rest) = $p2.parse(rest)?;
             let (c, rest) = $p3.parse(rest)?;
@@ -242,12 +242,12 @@ macro_rules! and {
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
 fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
     move |pc: ParseContext<'a>| {
-        println!("opt, pc: {:?}", pc);
+        //println!("opt, pc: {:?}", pc);
         let x = match p.parse(pc) {
             Ok((result, rest)) => Ok((Some(result), rest)),
             _ => Ok((None, pc)),
         };
-        println!("opt, out: {:?}", &x);
+        //println!("opt, out: {:?}", &x);
         x
     }
 }
