@@ -79,14 +79,14 @@ where
 /// Read `b` byte by value.
 fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
     move |pc: ParseContext<'a>| {
-        println!("[l:{}][byte][in] b: {}", pc.content.len(), b);
+        println!("[l:{}][byte][in] b: {}", pc.pos, b);
         let x = match pc.input().len() > 0 && pc.input()[0] == b {
             true => Ok((b, pc.forward(1))),
             _ => Err(ParseError {
                 message: format!("no byte: {:?} found", b),
             }),
         };
-        println!("[l:{}][byte][OUT] b: {}", pc.content.len(), b);
+        println!("[l:{}][byte][OUT] b: {}", pc.pos, b);
         x
     }
 }
