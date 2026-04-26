@@ -743,7 +743,7 @@ fn main() {
             Ok(mut _stream) => {
                 let store = Arc::clone(&store); //store.clone();
                 let list_store = Arc::clone(&list_store);
-                thread::spawn(move || {
+                tokio::spawn(async move {
                     println!("accepted new connection");
                     let mut buffer = [0u8; 1024];
 
