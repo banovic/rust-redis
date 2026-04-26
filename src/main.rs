@@ -193,6 +193,7 @@ macro_rules! and {
         move |pc: ParseContext<'a>| {
             //println!("and, pc: {:?}", pc);
             let (a, rest) = $p1.parse(pc)?;
+            println!("a = {:?}, l = {}", &a, rest.pos);
             let (b, rest) = $p2.parse(rest)?;
             let (c, rest) = $p3.parse(rest)?;
             Ok(((a, b, c), rest))
