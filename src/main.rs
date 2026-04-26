@@ -195,7 +195,9 @@ macro_rules! and {
             let (a, rest) = $p1.parse(pc)?;
             println!("a = {:?}, l = {}", &a, rest.pos);
             let (b, rest) = $p2.parse(rest)?;
+            println!("a = {:?}, l = {}", &b, rest.pos);
             let (c, rest) = $p3.parse(rest)?;
+            println!("a = {:?}, l = {}", &c, rest.pos);
             Ok(((a, b, c), rest))
         }
     };
