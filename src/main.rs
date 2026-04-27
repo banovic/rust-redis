@@ -883,7 +883,7 @@ async fn main() {
                             Ok((command, _)) => {
                                 match process_command(command, &store, &list_store).await {
                                     Ok(resp) => {
-                                        //println!("Response: {:?}", resp);
+                                        println!("Response: {:?}", resp);
                                         let mut out = Vec::new();
                                         encode_resp(&resp, &mut out);
                                         let _ = _stream.write(&out[..]);
