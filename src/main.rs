@@ -64,20 +64,13 @@ where
 /// Read `b` byte by value.
 fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
     move |input: ParserInput<'a>| {
-        println!("[byte][in] b: {}", b);
-        let x = match input.len() > 0 && input[0] == b {
-            true => {
-                println!("[byte] match! b = {}", b);
-                Ok((b, &input[1..]))
-            }
-            _ => Err(ParseError {
+        if input.len() > 0 && input[0] == b {
+            Ok((b, &input[1..]))
+        } else {
+            Err(ParseError {
                 message: format!("[byte] no byte: {:?} found", b),
-            }),
-        };
-        if x.is_ok() {
-            println!("[byte][OUT] b: {}", b);
+            })
         }
-        x
     }
 }
 
@@ -766,6 +759,10 @@ async fn process_list_blpop(
         }
     };
 
+    println!(
+        "[BLPOP] Starting, lists: {:?}, timeout: {:?}",
+        lists, duration
+    );
     match timeout(duration, future).await {
         Ok(Some((list, head))) => Ok(Resp::Array(vec![
             Resp::BulkString(list),
