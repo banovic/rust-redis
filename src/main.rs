@@ -49,15 +49,15 @@ type ParserInput<'a> = &'a [u8];
 type ParseResult<'a, T> = Result<(T, ParserInput<'a>), ParseError>;
 ///
 trait Parser<'a, T> {
-    fn parse(&self, pc: ParserInput<'a>) -> ParseResult<'a, T>;
+    fn parse(&self, input: ParserInput<'a>) -> ParseResult<'a, T>;
 }
 
 impl<'a, T, F> Parser<'a, T> for F
 where
     F: Fn(ParserInput<'a>) -> ParseResult<'a, T>,
 {
-    fn parse(&self, pc: ParserInput<'a>) -> ParseResult<'a, T> {
-        self(pc)
+    fn parse(&self, input: ParserInput<'a>) -> ParseResult<'a, T> {
+        self(input)
     }
 }
 ///
@@ -124,13 +124,11 @@ fn take<'a>(n: usize) -> impl Parser<'a, &'a [u8]> {
 /// Read all bytes while predicate `pred` returns true.
 fn take_while<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
-        println!("digits, pc: {:?}", input);
-
         let n = input.iter().take_while(|&&b| pred(b)).count();
         if n == 0 {
             return Err(ParseError {
                 message: format!(
-                    "expected to match at least one byte, but matched 0; pc = {:?}",
+                    "expected to match at least one byte, but matched 0; input = {:?}",
                     input
                 ),
             });
@@ -159,21 +157,15 @@ fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
 
 /// `or` combinator, it succeeds if `p1` or `p2` succeeds.
 fn or<'a, T: Debug>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
-    move |input: ParserInput<'a>| {
-        //println!("or, pc: {:?}", pc);
-        let x = match p1.parse(input) {
-            Ok(result) => Ok(result),
-            _ => p2.parse(input),
-        };
-        //println!("or, out: {:?}", x);
-        x
+    move |input: ParserInput<'a>| match p1.parse(input) {
+        Ok(result) => Ok(result),
+        _ => p2.parse(input),
     }
 }
 
 /// `and` combinator, it succeeds when `p1` matches and then `p2` matches.
 fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<'a, (A, B)> {
     move |input: ParserInput<'a>| {
-        //println!("and, pc: {:?}", pc);
         let (a, rest) = p1.parse(input)?;
         let (b, rest) = p2.parse(rest)?;
         Ok(((a, b), rest))
@@ -315,14 +307,9 @@ macro_rules! or {
 
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
 fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
-    move |input: ParserInput<'a>| {
-        //println!("opt, pc: {:?}", pc);
-        let x = match p.parse(input) {
-            Ok((result, rest)) => Ok((Some(result), rest)),
-            _ => Ok((None, input)),
-        };
-        //println!("opt, out: {:?}", &x);
-        x
+    move |input: ParserInput<'a>| match p.parse(input) {
+        Ok((result, rest)) => Ok((Some(result), rest)),
+        _ => Ok((None, input)),
     }
 }
 
