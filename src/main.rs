@@ -17,6 +17,8 @@ use std::{
     usize,
 };
 
+use tokio::time::timeout;
+
 type ByteString = Vec<u8>;
 
 /// RESP - REdis Serialization Protocol
@@ -731,7 +733,7 @@ fn process_list_lrange(
     Ok(Resp::Array(result))
 }
 
-fn process_list_blpop(
+async fn process_list_blpop(
     args: &[Resp],
     list_store: &Arc<RwLock<RedisListStore>>,
 ) -> Result<Resp, ParseError> {
@@ -740,14 +742,50 @@ fn process_list_blpop(
             message: format!("Unsupported BLPOP command shape: {:?}", args),
         });
     }
-    // let timeout = match args.last().unwrap() {
-    //     Resp::BulkString(n) => unsigned_integer()
-    // }?;
-    let resf = async {};
-    panic!()
+    let (t, lists) = args.split_last().unwrap();
+    let (t, _) = match t {
+        Resp::BulkString(n) => float::<f64>().parse(n),
+        _ => Err(ParseError {
+            message: format!(
+                "Timeout for BLPOP must be double (f64), got: {:?}",
+                args.last().unwrap()
+            ),
+        }),
+    }?;
+    let duration = Duration::from_micros((t * 1_000_000.) as u64);
+
+    let lists = lists
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(l) => Some(l.to_vec()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let future = async {
+        let mut store = list_store.write().unwrap();
+        loop {
+            for l in &lists {
+                if let Some(mut list) = store.get_mut(l) {
+                    if let Some(head) = list.pop_front() {
+                        return Some((l.to_vec(), head));
+                    }
+                }
+            }
+        }
+    };
+
+    match timeout(duration, future).await {
+        Ok(Some((list, head))) => Ok(Resp::Array(vec![
+            Resp::BulkString(list),
+            Resp::BulkString(head),
+        ])),
+        Ok(None) => Ok(Resp::Null),
+        Err(_) => Ok(Resp::Null),
+    }
 }
 
-fn process_command(
+async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
     list_store: &Arc<RwLock<RedisListStore>>,
@@ -768,7 +806,7 @@ fn process_command(
                         b"LPUSH" => process_list_lpush(args, list_store),
                         b"LLEN" => process_list_llen(args, list_store),
                         b"LPOP" => process_list_lpop(args, list_store),
-                        b"BLPOP" => process_list_blpop(args, list_store),
+                        b"BLPOP" => process_list_blpop(args, list_store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
@@ -854,16 +892,17 @@ async fn main() {
                             break;
                         }
                         match parse_resp(&buffer) {
-                            Ok((command, _)) => match process_command(command, &store, &list_store)
-                            {
-                                Ok(resp) => {
-                                    //println!("Response: {:?}", resp);
-                                    let mut out = Vec::new();
-                                    encode_resp(&resp, &mut out);
-                                    let _ = _stream.write(&out[..]);
+                            Ok((command, _)) => {
+                                match process_command(command, &store, &list_store).await {
+                                    Ok(resp) => {
+                                        //println!("Response: {:?}", resp);
+                                        let mut out = Vec::new();
+                                        encode_resp(&resp, &mut out);
+                                        let _ = _stream.write(&out[..]);
+                                    }
+                                    Err(error) => println!("Processing error: {:?}", error),
                                 }
-                                Err(error) => println!("Processing error: {:?}", error),
-                            },
+                            }
                             Err(error) => println!("Parse error: {:?}", error),
                         }
                         //let _ = _stream.write(b"+PONG\r\n");
