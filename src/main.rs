@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use core::str;
 use std::{
     collections::{HashMap, VecDeque},
     error,
@@ -7,6 +8,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     ops::{AddAssign, Mul, MulAssign, Neg},
+    os::unix::process,
     result,
     str::{FromStr, from_utf8},
     sync::{Arc, RwLock},
@@ -79,12 +81,28 @@ fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
 
 ///
 /// Read `tag` bytes by value.
-fn tag<'a>(tag: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
-    move |input: ParserInput<'a>| match input.starts_with(tag) {
-        true => Ok((tag, &input[tag.len()..])),
-        _ => Err(ParseError {
-            message: format!("[tag] no tag: {:?} found", tag),
-        }),
+fn tag<'a>(expected: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
+    move |input: ParserInput<'a>| {
+        if input.starts_with(expected) {
+            Ok(input.split_at(expected.len()))
+        } else {
+            Err(ParseError {
+                message: format!("[tag] no tag: {:?} found", expected),
+            })
+        }
+    }
+}
+
+fn tag_no_case<'a>(expected: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
+    move |input: ParserInput<'a>| {
+        let n = expected.len();
+        if input.len() >= n && input[..n].eq_ignore_ascii_case(expected) {
+            Ok(input.split_at(n))
+        } else {
+            Err(ParseError {
+                message: format!("[tag_no_case] no tag: {:?} found", expected),
+            })
+        }
     }
 }
 
@@ -120,19 +138,19 @@ fn take_while<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
     }
 }
 
-/// Read all bytes until `limit` bytes are next. It does not read any of `limit` bytes.
-fn take_until<'a>(limit: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
+/// Read all bytes until `delimiter` bytes are next. It does not read any of `delimiter` bytes.
+fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
         let mut i = 0;
-        while i < input.len() - limit.len() {
-            if input[i..].starts_with(limit) {
+        while i < input.len() - delimiter.len() {
+            if input[i..].starts_with(delimiter) {
                 return Ok(input.split_at(i));
             }
             i += 1;
         }
 
         Err(ParseError {
-            message: format!("expected to match limit: {:?}, but haven't", limit),
+            message: format!("expected to match limit: {:?}, but haven't", delimiter),
         })
     }
 }
@@ -161,78 +179,138 @@ fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<
 }
 
 macro_rules! and {
-    ($p1: expr, $p2: expr $(,)?) => {
+    ($p1: expr, $p2: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
         move |input: ParserInput<'a>| {
-            //println!("and, pc: {:?}", pc);
-            let (a, rest) = $p1.parse(input)?;
-            let (b, rest) = $p2.parse(rest)?;
+            let (a, rest) = p1.parse(input)?;
+            let (b, rest) = p2.parse(rest)?;
             Ok(((a, b), rest))
         }
-    };
+    }};
 
-    ($p1: expr, $p2: expr, $p3: expr $(,)?) => {
+    ($p1: expr, $p2: expr, $p3: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
         move |input: ParserInput<'a>| {
-            //println!("and, pc: {:?}", pc);
-            let (a, rest) = $p1.parse(input)?;
-            println!("a = {:?}, l = {:?}", &a, rest);
-            let (b, rest) = $p2.parse(rest)?;
-            println!("a = {:?}, l = {:?}", &b, &rest);
-            let (c, rest) = $p3.parse(rest)?;
-            println!("a = {:?}, l = {:?}", &c, &rest);
+            let (a, rest) = p1.parse(input)?;
+            let (b, rest) = p2.parse(rest)?;
+            let (c, rest) = p3.parse(rest)?;
             Ok(((a, b, c), rest))
         }
-    };
+    }};
 
-    ($p1: expr, $p2: expr, $p3: expr, $p4: expr $(,)?) => {
+    ($p1: expr, $p2: expr, $p3: expr, $p4: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
+        let p4 = $p4;
         move |input: ParserInput<'a>| {
-            //println!("and, pc: {:?}", pc);
-            let (a, rest) = $p1.parse(input)?;
-            let (b, rest) = $p2.parse(rest)?;
-            let (c, rest) = $p3.parse(rest)?;
-            let (d, rest) = $p4.parse(rest)?;
+            let (a, rest) = p1.parse(input)?;
+            let (b, rest) = p2.parse(rest)?;
+            let (c, rest) = p3.parse(rest)?;
+            let (d, rest) = p4.parse(rest)?;
             Ok(((a, b, c, d), rest))
         }
-    };
+    }};
 
-    ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr $(,)?) => {
+    ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
+        let p4 = $p4;
+        let p5 = $p5;
         move |input: ParserInput<'a>| {
-            //println!("and, pc: {:?}", pc);
-            let (a, rest) = $p1.parse(input)?;
-            let (b, rest) = $p2.parse(rest)?;
-            let (c, rest) = $p3.parse(rest)?;
-            let (d, rest) = $p4.parse(rest)?;
-            let (e, rest) = $p5.parse(rest)?;
+            let (a, rest) = p1.parse(input)?;
+            let (b, rest) = p2.parse(rest)?;
+            let (c, rest) = p3.parse(rest)?;
+            let (d, rest) = p4.parse(rest)?;
+            let (e, rest) = p5.parse(rest)?;
             Ok(((a, b, c, d, e), rest))
         }
-    };
+    }};
 
-    ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr, $p6: expr $(,)?) => {
+    ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr, $p6: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
+        let p4 = $p4;
+        let p5 = $p5;
+        let p6 = $p6;
         move |input: ParserInput<'a>| {
-            //println!("and, pc: {:?}", pc);
-            let (a, rest) = $p1.parse(input)?;
-            let (b, rest) = $p2.parse(rest)?;
-            let (c, rest) = $p3.parse(rest)?;
-            let (d, rest) = $p4.parse(rest)?;
-            let (e, rest) = $p5.parse(rest)?;
-            let (f, rest) = $p6.parse(rest)?;
+            let (a, rest) = p1.parse(input)?;
+            let (b, rest) = p2.parse(rest)?;
+            let (c, rest) = p3.parse(rest)?;
+            let (d, rest) = p4.parse(rest)?;
+            let (e, rest) = p5.parse(rest)?;
+            let (f, rest) = p6.parse(rest)?;
             Ok(((a, b, c, d, e, f), rest))
         }
-    };
+    }};
 
-    ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr, $p6: expr, $p7: expr $(,)?) => {
+    ($p1: expr, $p2: expr, $p3: expr, $p4: expr, $p5: expr, $p6: expr, $p7: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
+        let p4 = $p4;
+        let p5 = $p5;
+        let p6 = $p6;
+        let p7 = $p7;
         move |input: ParserInput<'a>| {
-            //println!("and, pc: {:?}", pc);
-            let (a, rest) = $p1.parse(input)?;
-            let (b, rest) = $p2.parse(rest)?;
-            let (c, rest) = $p3.parse(rest)?;
-            let (d, rest) = $p4.parse(rest)?;
-            let (e, rest) = $p5.parse(rest)?;
-            let (f, rest) = $p6.parse(rest)?;
-            let (g, rest) = $p7.parse(rest)?;
+            let (a, rest) = p1.parse(input)?;
+            let (b, rest) = p2.parse(rest)?;
+            let (c, rest) = p3.parse(rest)?;
+            let (d, rest) = p4.parse(rest)?;
+            let (e, rest) = p5.parse(rest)?;
+            let (f, rest) = p6.parse(rest)?;
+            let (g, rest) = p7.parse(rest)?;
             Ok(((a, b, c, d, e, f, g), rest))
         }
-    };
+    }};
 }
+
+macro_rules! or {
+    ($p1: expr, $p2: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        move |input: ParserInput<'a>| match p1.parse(input) {
+            Ok(result) => Ok(result),
+            _ => p2.parse(input),
+        }
+    }};
+
+    ($p1: expr, $p2: expr, $p3: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
+        move |input: ParserInput<'a>| match p1.parse(input) {
+            Ok(result) => Ok(result),
+            _ => match p2.parse(input) {
+                Ok(result) => Ok(result),
+                _ => p3.parse(input),
+            },
+        }
+    }};
+
+    ($p1: expr, $p2: expr, $p3: expr, $p4: expr $(,)?) => {{
+        let p1 = $p1;
+        let p2 = $p2;
+        let p3 = $p3;
+        let p4 = $p4;
+        move |input: ParserInput<'a>| match p1.parse(input) {
+            Ok(result) => Ok(result),
+            _ => match p2.parse(input) {
+                Ok(result) => Ok(result),
+                _ => match p3.parse(input) {
+                    Ok(result) => Ok(result),
+                    _ => p4.parse(input),
+                },
+            },
+        }
+    }};
+}
+
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
 fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
     move |input: ParserInput<'a>| {
@@ -246,52 +324,62 @@ fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
     }
 }
 
-fn unsigned_integer<'a, T>() -> impl Parser<'a, T>
+fn recognize<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, &'a [u8]> {
+    move |input: ParserInput<'a>| {
+        let (_, rest) = p.parse(input)?;
+        let len = input.len() - rest.len();
+        Ok((&input[..len], rest))
+    }
+}
+
+fn integer<'a, T>() -> impl Parser<'a, T>
 where
     T: FromStr,
 {
     move |input: ParserInput<'a>| {
-        let digits_parser = take_while(|b| b.is_ascii_digit());
-        let ((_, digits), rest) = and(opt(byte(b'+')), digits_parser).parse(input)?;
-        println!("[out][unsigned_integer][digits: {:?}]", &digits);
-        // Ok, since digits are ASCII
-        let s = from_utf8(digits).unwrap();
-        let n = match s.parse::<T>() {
+        let digits = || recognize(take_while(|b| b.is_ascii_digit()));
+        let sign = || recognize(or(byte(b'-'), byte(b'+')));
+        let number = recognize(and!(opt(sign()), digits()));
+        let (bytes, rest) = number.parse(input)?;
+        let string = from_utf8(bytes).unwrap();
+        let n = match string.parse::<T>() {
             Ok(v) => Ok(v),
             _ => Err(ParseError {
-                message: format!("cannot parse digits from string: {}", s),
+                message: format!("[float] cannot parse from string: {}", string),
             }),
         }?;
-        println!("[out][unsigned_integer]");
         Ok((n, rest))
     }
 }
 
-fn signed_integer<'a, T>() -> impl Parser<'a, T>
+fn float<'a, T>() -> impl Parser<'a, T>
 where
-    T: FromStr + Mul<Output = T> + From<i8>,
+    T: FromStr,
 {
     move |input: ParserInput<'a>| {
-        println!("signed_integer, pc: {:?}", input);
-        let digits_parser = take_while(|b| b.is_ascii_digit());
-        let ((sign, digits), rest) =
-            and(opt(or(byte(b'-'), byte(b'+'))), digits_parser).parse(input)?;
-        println!(
-            "signed_integer, sign: {:?}, digits = {:?}, rest: {:?}",
-            sign, digits, rest
+        let digits = || recognize(take_while(|b| b.is_ascii_digit()));
+        let sign = || recognize(or(byte(b'-'), byte(b'+')));
+        let inifinity = || recognize(tag(b"inifinity"));
+        let inf = || recognize(tag(b"inf"));
+        let nan = || recognize(tag(b"nan"));
+        let e = || recognize(or!(byte(b'e'), byte(b'E')));
+        let dot = || recognize(byte(b'.'));
+        let exp = recognize(and!(e(), opt(sign()), digits()));
+        let number_digits = or!(
+            recognize(and!(digits(), dot(), opt(digits()))),
+            recognize(and!(opt(digits()), dot(), digits())),
+            recognize(digits()),
         );
-        // Ok, since digits are ASCII
-        let s = from_utf8(digits).unwrap();
-        let n = match s.parse::<T>() {
+        let number = recognize(and!(number_digits, opt(exp)));
+        let f = recognize(and!(opt(sign()), or!(inifinity(), inf(), nan(), number)));
+        let (bytes, rest) = f.parse(input)?;
+        let string = from_utf8(bytes).unwrap();
+        let n = match string.parse::<T>() {
             Ok(v) => Ok(v),
             _ => Err(ParseError {
-                message: format!("cannot parse digits from string: {}", s),
+                message: format!("[float] cannot parse from string: {}", string),
             }),
         }?;
-        // let n = match sign {
-        //     Some(b'-') => n * T::from(-1),
-        //     _ => n
-        // };
         Ok((n, rest))
     }
 }
@@ -310,7 +398,7 @@ fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, Resp> {
 }
 
 fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, Resp> {
-    let ((_, l), rest) = and!(byte(b'$'), unsigned_integer::<usize>()).parse(input)?;
+    let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
     let ((_, s, _), rest) =
         and!(tag(&[b'\r', b'\n']), take(l), tag(&[b'\r', b'\n'])).parse(rest)?;
 
@@ -318,12 +406,8 @@ fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, Resp> {
 }
 
 fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, Resp> {
-    let ((_, l, _), rest) = and!(
-        byte(b'*'),
-        unsigned_integer::<usize>(),
-        tag(&[b'\r', b'\n'])
-    )
-    .parse(input)?;
+    let ((_, l, _), rest) =
+        and!(byte(b'*'), integer::<usize>(), tag(&[b'\r', b'\n'])).parse(input)?;
 
     let mut elements: Vec<Resp> = Vec::new();
     let mut new_rest = rest;
@@ -399,7 +483,7 @@ fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseE
             Resp::BulkString(expx),
             Resp::BulkString(ttl),
         ] => {
-            let n = match unsigned_integer::<u64>().parse(ttl) {
+            let n = match integer::<u64>().parse(ttl) {
                 Ok((value, _)) => value,
                 Err(ParseError { message }) => {
                     return Err(ParseError {
@@ -553,7 +637,7 @@ fn process_list_lpop(
         [Resp::BulkString(name)] => Ok((name, None)),
         [Resp::BulkString(name), Resp::BulkString(count)] => {
             //let (count, _) = unsigned_integer::<u32>().parse(RespParseContext::from_vec(count))?;
-            match unsigned_integer::<u32>().parse(count)? {
+            match integer::<u32>().parse(count)? {
                 (c, _) => Ok((name, Some(c))),
                 _ => Err(ParseError {
                     message: format!("Invalid count param spec: {:?}", args),
@@ -605,8 +689,8 @@ fn process_list_lrange(
             Resp::BulkString(start),
             Resp::BulkString(stop),
         ] => {
-            let (start, _) = signed_integer::<i32>().parse(start)?;
-            let (stop, _) = signed_integer::<i32>().parse(stop)?;
+            let (start, _) = integer::<i32>().parse(start)?;
+            let (stop, _) = integer::<i32>().parse(stop)?;
             Ok((name, start, stop))
         }
         _ => Err(ParseError {
@@ -647,6 +731,22 @@ fn process_list_lrange(
     Ok(Resp::Array(result))
 }
 
+fn process_list_blpop(
+    args: &[Resp],
+    list_store: &Arc<RwLock<RedisListStore>>,
+) -> Result<Resp, ParseError> {
+    if args.len() < 2 {
+        return Err(ParseError {
+            message: format!("Unsupported BLPOP command shape: {:?}", args),
+        });
+    }
+    // let timeout = match args.last().unwrap() {
+    //     Resp::BulkString(n) => unsigned_integer()
+    // }?;
+    let resf = async {};
+    panic!()
+}
+
 fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -668,6 +768,7 @@ fn process_command(
                         b"LPUSH" => process_list_lpush(args, list_store),
                         b"LLEN" => process_list_llen(args, list_store),
                         b"LPOP" => process_list_lpop(args, list_store),
+                        b"BLPOP" => process_list_blpop(args, list_store),
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
