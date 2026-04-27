@@ -752,7 +752,11 @@ async fn process_list_blpop(
             ),
         }),
     }?;
-    let duration = Duration::from_micros((t * 1_000_000.) as u64);
+    let duration = if t == 0.0 {
+        Duration::MAX
+    } else {
+        Duration::from_micros((t * 1_000_000.) as u64)
+    };
 
     let lists = lists
         .iter()
