@@ -760,8 +760,8 @@ async fn process_list_blpop(
     };
 
     println!(
-        "[BLPOP] Starting, lists: {:?}, timeout: {:?}",
-        lists, duration
+        "[BLPOP] Starting, lists: {:?}, timeout: {:?}, t: {}",
+        lists, duration, t
     );
     match timeout(duration, future).await {
         Ok(Some((list, head))) => Ok(Resp::Array(vec![
