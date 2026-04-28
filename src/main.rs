@@ -2,7 +2,7 @@
 use core::str;
 use futures::future::select_all;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     error,
     fmt::{self, Debug, format},
     hash::Hash,
@@ -10,7 +10,7 @@ use std::{
     os::unix::process,
     result,
     str::{FromStr, from_utf8},
-    sync::{Arc, RwLock},
+    sync::Arc,
     thread,
     time::{Duration, Instant, SystemTime},
     usize,
@@ -18,7 +18,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    sync::Notify,
+    sync::{Notify, RwLock},
     time::timeout,
 };
 
@@ -57,6 +57,11 @@ fn waiter_for(store: &mut RedisListStore, key: &[u8]) -> Arc<Notify> {
         .entry(key.to_vec())
         .or_insert_with(|| Arc::new(Notify::new()))
         .clone()
+}
+
+type RedisStream = BTreeMap<Vec<u8>, Vec<u8>>;
+struct RedisStreamStore {
+    streams: HashMap<Vec<u8>, BTreeMap<Vec<u8>, Vec<Vec<u8>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -462,10 +467,10 @@ fn process_ping(args: &[Resp]) -> Result<Resp, ParseError> {
     }
 }
 
-fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+async fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
     match args {
         [Resp::BulkString(key), Resp::BulkString(value)] => {
-            let mut store = store.write().unwrap();
+            let mut store = store.write().await;
             let value = StoreValue {
                 t: Instant::now(),
                 ttl: None,
@@ -500,7 +505,7 @@ fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseE
                     });
                 }
             };
-            let mut store = store.write().unwrap();
+            let mut store = store.write().await;
             let value = StoreValue {
                 t: Instant::now(),
                 ttl: Some(ttl),
@@ -515,10 +520,10 @@ fn process_set(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseE
     }
 }
 
-fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+async fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
     match args {
         [Resp::BulkString(key)] => {
-            let store = store.read().unwrap();
+            let store = store.read().await;
             match store.get(key) {
                 Some(StoreValue { t, ttl, value }) => match ttl {
                     None => Ok(Resp::BulkString(value.to_vec())),
@@ -535,7 +540,7 @@ fn process_get(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseE
 }
 
 // Lists
-fn process_list_rpush(
+async fn process_list_rpush(
     args: &[Resp],
     list_store: &Arc<RwLock<RedisListStore>>,
 ) -> Result<Resp, ParseError> {
@@ -557,7 +562,7 @@ fn process_list_rpush(
         }
     }
 
-    let mut store = list_store.write().unwrap();
+    let mut store = list_store.write().await;
 
     store
         .lists
@@ -573,7 +578,7 @@ fn process_list_rpush(
     ))
 }
 
-fn process_list_lpush(
+async fn process_list_lpush(
     args: &[Resp],
     list_store: &Arc<RwLock<RedisListStore>>,
 ) -> Result<Resp, ParseError> {
@@ -587,7 +592,7 @@ fn process_list_lpush(
         }),
     }?;
 
-    let mut store = list_store.write().unwrap();
+    let mut store = list_store.write().await;
     store
         .lists
         .entry(name.to_vec())
@@ -616,7 +621,7 @@ fn process_list_lpush(
     ))
 }
 
-fn process_list_llen(
+async fn process_list_llen(
     args: &[Resp],
     list_store: &Arc<RwLock<RedisListStore>>,
 ) -> Result<Resp, ParseError> {
@@ -630,7 +635,7 @@ fn process_list_llen(
         }),
     }?;
 
-    let store = list_store.read().unwrap();
+    let store = list_store.read().await;
     let l = match store.lists.get(name) {
         Some(l) => l.len(),
         _ => 0,
@@ -638,7 +643,7 @@ fn process_list_llen(
     Ok(Resp::Integer(l as i64))
 }
 
-fn process_list_lpop(
+async fn process_list_lpop(
     args: &[Resp],
     list_store: &Arc<RwLock<RedisListStore>>,
 ) -> Result<Resp, ParseError> {
@@ -661,7 +666,7 @@ fn process_list_lpop(
         }),
     }?;
 
-    let mut store = list_store.write().unwrap();
+    let mut store = list_store.write().await;
     let list = store.lists.get_mut(name);
     if list.is_none() {
         return Ok(Resp::Null);
@@ -688,7 +693,7 @@ fn process_list_lpop(
     }
 }
 
-fn process_list_lrange(
+async fn process_list_lrange(
     args: &[Resp],
     list_store: &Arc<RwLock<RedisListStore>>,
 ) -> Result<Resp, ParseError> {
@@ -709,7 +714,7 @@ fn process_list_lrange(
     println!("start: {}, stop: {}", start, stop);
 
     let mut result = Vec::new();
-    let store = list_store.read().unwrap();
+    let store = list_store.read().await;
     let list_option = store.lists.get(name);
     if list_option.is_none() {
         return Ok(Resp::Array(result));
@@ -781,7 +786,7 @@ async fn process_list_blpop(
     loop {
         // 1, Get or create notifiers for all target keys, under lock
         let notifiers: Vec<Arc<Notify>> = {
-            let mut store = list_store.write().unwrap();
+            let mut store = list_store.write().await;
             lists.iter().map(|k| waiter_for(&mut store, k)).collect()
         }; // lock for store dropped
 
@@ -793,7 +798,7 @@ async fn process_list_blpop(
 
         // 3. Try to pop - under lock, bruefly
         {
-            let mut store = list_store.write().unwrap();
+            let mut store = list_store.write().await;
             for k in &lists {
                 if let Some(list) = store.lists.get_mut(k) {
                     if let Some(head) = list.pop_front() {
@@ -819,10 +824,11 @@ async fn process_list_blpop(
     }
 }
 
-fn process_type(
+async fn process_type(
     args: &[Resp],
     store: &Arc<RwLock<Store>>,
     list_store: &Arc<RwLock<RedisListStore>>,
+    stream_store: &Arc<RwLock<RedisStreamStore>>,
 ) -> Result<Resp, ParseError> {
     if args.len() != 1 {
         return Err(ParseError {
@@ -835,19 +841,65 @@ fn process_type(
             message: format!("Unsupported TYPE command shape: {:?}", args),
         }),
     }?;
-    if store.read().unwrap().contains_key(key) {
+    if store.read().await.contains_key(key) {
         return Ok(Resp::SimpleString(b"string".to_vec()));
     }
-    if list_store.read().unwrap().lists.contains_key(key) {
+    if list_store.read().await.lists.contains_key(key) {
         return Ok(Resp::SimpleString(b"list".to_vec()));
     }
+    if stream_store.read().await.streams.contains_key(key) {
+        return Ok(Resp::SimpleString(b"stream".to_vec()));
+    }
     Ok(Resp::SimpleString(b"none".to_vec()))
+}
+
+async fn process_xadd(
+    args: &[Resp],
+    stream_store: &Arc<RwLock<RedisStreamStore>>,
+) -> Result<Resp, ParseError> {
+    if args.len() < 4 {
+        return Err(ParseError {
+            message: "Unsupported XADD command shape".to_string(),
+        });
+    }
+    let (name, id) = match (&args[0], &args[1]) {
+        (Resp::BulkString(n), Resp::BulkString(i)) => Ok((n, i)),
+        _ => Err(ParseError {
+            message: "Unsupported XADD command shape".to_string(),
+        }),
+    }?;
+    if &args[2..].len() % 2 != 0 {
+        return Err(ParseError {
+            message: "Unsupported XADD command shape".to_string(),
+        });
+    }
+    let values = args[2..]
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(v) => Some(v.to_vec()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut store = stream_store.write().await;
+    let stream = match store.streams.get_mut(name) {
+        Some(s) => s,
+        None => &mut BTreeMap::new(),
+    };
+    if stream.contains_key(id) {
+        return Err(ParseError {
+            message: "XADD: id already exists".to_string(),
+        });
+    }
+    stream.insert(id.to_vec(), values);
+    Ok(Resp::BulkString(id.to_vec()))
 }
 
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
     list_store: &Arc<RwLock<RedisListStore>>,
+    stream_store: &Arc<RwLock<RedisStreamStore>>,
 ) -> Result<Resp, ParseError> {
     match input {
         Resp::Array(elements) => {
@@ -857,17 +909,18 @@ async fn process_command(
                     match &command[..] {
                         b"ECHO" => process_echo(args),
                         b"PING" => process_ping(args),
-                        b"SET" => process_set(args, store),
-                        b"GET" => process_get(args, store),
+                        b"SET" => process_set(args, store).await,
+                        b"GET" => process_get(args, store).await,
                         // Lists
-                        b"RPUSH" => process_list_rpush(args, list_store),
-                        b"LRANGE" => process_list_lrange(args, list_store),
-                        b"LPUSH" => process_list_lpush(args, list_store),
-                        b"LLEN" => process_list_llen(args, list_store),
-                        b"LPOP" => process_list_lpop(args, list_store),
+                        b"RPUSH" => process_list_rpush(args, list_store).await,
+                        b"LRANGE" => process_list_lrange(args, list_store).await,
+                        b"LPUSH" => process_list_lpush(args, list_store).await,
+                        b"LLEN" => process_list_llen(args, list_store).await,
+                        b"LPOP" => process_list_lpop(args, list_store).await,
                         b"BLPOP" => process_list_blpop(args, list_store).await,
                         // Streams
-                        b"TYPE" => process_type(args, store, list_store),
+                        b"TYPE" => process_type(args, store, list_store, stream_store).await,
+                        b"XADD" => process_xadd(args, stream_store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
@@ -944,11 +997,15 @@ async fn main() {
         lists: HashMap::new(),
         waiters: HashMap::new(),
     }));
+    let stream_store = Arc::new(RwLock::new(RedisStreamStore {
+        streams: HashMap::new(),
+    }));
 
     loop {
         let (mut stream, _) = listener.accept().await.unwrap();
         let store = Arc::clone(&store); //store.clone();
         let list_store = Arc::clone(&list_store);
+        let stream_store = Arc::clone(&stream_store);
         tokio::spawn(async move {
             println!("accepted new connection");
             let mut buffer = [0u8; 1024];
@@ -958,15 +1015,17 @@ async fn main() {
                     break;
                 }
                 match parse_resp(&buffer) {
-                    Ok((command, _)) => match process_command(command, &store, &list_store).await {
-                        Ok(resp) => {
-                            println!("Response: {:?}", resp);
-                            let mut out = Vec::new();
-                            encode_resp(&resp, &mut out);
-                            let _ = stream.write_all(&out[..]).await;
+                    Ok((command, _)) => {
+                        match process_command(command, &store, &list_store, &stream_store).await {
+                            Ok(resp) => {
+                                println!("Response: {:?}", resp);
+                                let mut out = Vec::new();
+                                encode_resp(&resp, &mut out);
+                                let _ = stream.write_all(&out[..]).await;
+                            }
+                            Err(error) => println!("Processing error: {:?}", error),
                         }
-                        Err(error) => println!("Processing error: {:?}", error),
-                    },
+                    }
                     Err(error) => println!("Parse error: {:?}", error),
                 }
                 //let _ = _stream.write(b"+PONG\r\n");
