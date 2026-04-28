@@ -819,6 +819,31 @@ async fn process_list_blpop(
     }
 }
 
+fn process_type(
+    args: &[Resp],
+    store: &Arc<RwLock<Store>>,
+    list_store: &Arc<RwLock<RedisListStore>>,
+) -> Result<Resp, ParseError> {
+    if args.len() != 1 {
+        return Err(ParseError {
+            message: format!("Unsupported TYPE command shape: {:?}", args),
+        });
+    }
+    let key = match &args[0] {
+        Resp::BulkString(k) => Ok(k),
+        _ => Err(ParseError {
+            message: format!("Unsupported TYPE command shape: {:?}", args),
+        }),
+    }?;
+    if store.read().unwrap().contains_key(key) {
+        return Ok(Resp::SimpleString(b"string".to_vec()));
+    }
+    if list_store.read().unwrap().lists.contains_key(key) {
+        return Ok(Resp::SimpleString(b"list".to_vec()));
+    }
+    Ok(Resp::SimpleString(b"none".to_vec()))
+}
+
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -841,6 +866,8 @@ async fn process_command(
                         b"LLEN" => process_list_llen(args, list_store),
                         b"LPOP" => process_list_lpop(args, list_store),
                         b"BLPOP" => process_list_blpop(args, list_store).await,
+                        // Streams
+                        b"TYPE" => process_type(args, store, list_store),
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
