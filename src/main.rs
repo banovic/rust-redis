@@ -769,6 +769,10 @@ async fn process_list_blpop(
         })
         .collect::<Vec<_>>();
 
+    println!(
+        "BLPOP: lists: {:?}, t: {:?}, duration: {:?}",
+        lists, t, duration
+    );
     loop {
         // 1, Get or create notifiers for all target keys, under lock
         let notifiers: Vec<Arc<Notify>> = {
