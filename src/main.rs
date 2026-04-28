@@ -28,6 +28,7 @@ type ByteString = Vec<u8>;
 #[derive(Debug)]
 enum Resp {
     Null,
+    NullArray,
     SimpleString(Vec<u8>),
     BulkString(Vec<u8>),
     Integer(i64),
@@ -812,7 +813,7 @@ async fn process_list_blpop(
         } else {
             match timeout(duration, any).await {
                 Ok(_) => continue,
-                Err(_) => return Ok(Resp::Null),
+                Err(_) => return Ok(Resp::NullArray),
             }
         }
     }
@@ -872,6 +873,9 @@ fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
     match r {
         Resp::Null => {
             write_bytes(&mut out, &[b'$', b'-', b'1', b'\r', b'\n']);
+        }
+        Resp::NullArray => {
+            write_bytes(&mut out, &[b'*', b'-', b'1', b'\r', b'\n']);
         }
         Resp::SimpleString(value) => {
             write_bytes(&mut out, &[b'+']);
