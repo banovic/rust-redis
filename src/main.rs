@@ -59,9 +59,11 @@ fn waiter_for(store: &mut RedisListStore, key: &[u8]) -> Arc<Notify> {
         .clone()
 }
 
+// milliseconds-seqeunce id
+type StreamKey = (u64, u64);
 type RedisStream = BTreeMap<Vec<u8>, Vec<u8>>;
 struct RedisStreamStore {
-    streams: HashMap<Vec<u8>, BTreeMap<Vec<u8>, Vec<Vec<u8>>>>,
+    streams: HashMap<Vec<u8>, BTreeMap<StreamKey, Vec<Vec<u8>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -853,6 +855,13 @@ async fn process_type(
     Ok(Resp::SimpleString(b"none".to_vec()))
 }
 
+fn parse_stream_key<'a>(id: &'a Vec<u8>) -> Option<StreamKey> {
+    match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
+        Ok(((mid, _, sid), _)) => Some((mid, sid)),
+        _ => None,
+    }
+}
+
 async fn process_xadd(
     args: &[Resp],
     stream_store: &Arc<RwLock<RedisStreamStore>>,
@@ -868,6 +877,17 @@ async fn process_xadd(
             message: "Unsupported XADD command shape".to_string(),
         }),
     }?;
+    let key = match parse_stream_key(id) {
+        Some(k) => Ok(k),
+        _ => Err(ParseError {
+            message: "Unsupported XADD <id> key shape".to_string(),
+        }),
+    }?;
+    if key < (0, 1) {
+        return Err(ParseError {
+            message: "XADD key must be >= 0-1".to_string(),
+        });
+    }
     if &args[2..].len() % 2 != 0 {
         return Err(ParseError {
             message: "Unsupported XADD command shape".to_string(),
@@ -882,19 +902,22 @@ async fn process_xadd(
         .collect::<Vec<_>>();
 
     let mut store = stream_store.write().await;
-    if !store.streams.contains_key(name) {
-        store.streams.insert(name.to_vec(), BTreeMap::new());
-    }
-    if store.streams.get(name).unwrap().contains_key(id) {
+
+    let mut new_btree_map: BTreeMap<(u64, u64), Vec<Vec<u8>>> = BTreeMap::new();
+    let stream = store.streams.get_mut(name).unwrap_or(&mut new_btree_map);
+    if stream.contains_key(&key) {
         return Err(ParseError {
-            message: "XADD: id already exists".to_string(),
+            message: "XADD: key already exists".to_string(),
         });
     }
-    store
-        .streams
-        .get_mut(name)
-        .unwrap()
-        .insert(id.to_vec(), values);
+    if let Some(latest) = stream.last_entry() {
+        if &key > latest.key() {
+            return Err(ParseError {
+                message: "XADD: key must be increasing".to_string(),
+            });
+        }
+    }
+    store.streams.get_mut(name).unwrap().insert(key, values);
     Ok(Resp::BulkString(id.to_vec()))
 }
 
