@@ -882,16 +882,19 @@ async fn process_xadd(
         .collect::<Vec<_>>();
 
     let mut store = stream_store.write().await;
-    let stream = match store.streams.get_mut(name) {
-        Some(s) => s,
-        None => &mut BTreeMap::new(),
-    };
-    if stream.contains_key(id) {
+    if !store.streams.contains_key(name) {
+        store.streams.insert(name.to_vec(), BTreeMap::new());
+    }
+    if store.streams.get(name).unwrap().contains_key(id) {
         return Err(ParseError {
             message: "XADD: id already exists".to_string(),
         });
     }
-    stream.insert(id.to_vec(), values);
+    store
+        .streams
+        .get_mut(name)
+        .unwrap()
+        .insert(id.to_vec(), values);
     Ok(Resp::BulkString(id.to_vec()))
 }
 
