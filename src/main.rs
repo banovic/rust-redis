@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 use core::str;
+use futures::future::select_all;
 use std::{
     collections::{HashMap, VecDeque},
     error,
@@ -16,8 +17,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
     usize,
 };
-
-use tokio::time::timeout;
+use tokio::{sync::Notify, time::timeout};
 
 type ByteString = Vec<u8>;
 
@@ -29,6 +29,30 @@ enum Resp {
     BulkString(Vec<u8>),
     Integer(i64),
     Array(Vec<Resp>),
+}
+
+/**
+ * Store
+ */
+struct StoreValue {
+    t: Instant,
+    ttl: Option<Duration>,
+    value: Vec<u8>,
+}
+
+type Store = HashMap<Vec<u8>, StoreValue>;
+type RedisList = VecDeque<ByteString>;
+struct RedisListStore {
+    lists: HashMap<ByteString, RedisList>,
+    waiters: HashMap<ByteString, Arc<Notify>>,
+}
+
+fn waiter_for(store: &mut RedisListStore, key: &[u8]) -> Arc<Notify> {
+    store
+        .waiters
+        .entry(key.to_vec())
+        .or_insert_with(|| Arc::new(Notify::new()))
+        .clone()
 }
 
 #[derive(Debug, Clone)]
@@ -411,19 +435,6 @@ fn parse_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Resp> {
         }),
     }
 }
-/**
- * Store
- */
-struct StoreValue {
-    t: Instant,
-    ttl: Option<Duration>,
-    value: Vec<u8>,
-}
-
-type Store = HashMap<Vec<u8>, StoreValue>;
-
-type RedisList = VecDeque<ByteString>;
-type RedisListStore = HashMap<ByteString, RedisList>;
 
 /**
  * Process command
@@ -545,11 +556,17 @@ fn process_list_rpush(
     let mut store = list_store.write().unwrap();
 
     store
+        .lists
         .entry(name.to_vec())
         .and_modify(|e| e.append(&mut elements))
         .or_insert(elements);
 
-    Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
+    let notifier = waiter_for(&mut store, name);
+    notifier.notify_waiters();
+
+    Ok(Resp::Integer(
+        store.lists.get(name).map_or(0, |l| l.len() as i64),
+    ))
 }
 
 fn process_list_lpush(
@@ -568,6 +585,7 @@ fn process_list_lpush(
 
     let mut store = list_store.write().unwrap();
     store
+        .lists
         .entry(name.to_vec())
         .and_modify(|e| {
             for el in &args[1..] {
@@ -586,7 +604,12 @@ fn process_list_lpush(
             l
         });
 
-    Ok(Resp::Integer(store.get(name).map_or(0, |l| l.len() as i64)))
+    let notifier = waiter_for(&mut store, name);
+    notifier.notify_waiters();
+
+    Ok(Resp::Integer(
+        store.lists.get(name).map_or(0, |l| l.len() as i64),
+    ))
 }
 
 fn process_list_llen(
@@ -604,7 +627,7 @@ fn process_list_llen(
     }?;
 
     let store = list_store.read().unwrap();
-    let l = match store.get(name) {
+    let l = match store.lists.get(name) {
         Some(l) => l.len(),
         _ => 0,
     };
@@ -635,7 +658,7 @@ fn process_list_lpop(
     }?;
 
     let mut store = list_store.write().unwrap();
-    let list = store.get_mut(name);
+    let list = store.lists.get_mut(name);
     if list.is_none() {
         return Ok(Resp::Null);
     }
@@ -683,7 +706,7 @@ fn process_list_lrange(
 
     let mut result = Vec::new();
     let store = list_store.read().unwrap();
-    let list_option = store.get(name);
+    let list_option = store.lists.get(name);
     if list_option.is_none() {
         return Ok(Resp::Array(result));
     }
@@ -746,30 +769,44 @@ async fn process_list_blpop(
         })
         .collect::<Vec<_>>();
 
-    let future = async {
-        let mut store = list_store.write().unwrap();
-        loop {
-            for l in &lists {
-                if let Some(mut list) = store.get_mut(l) {
+    loop {
+        // 1, Get or create notifiers for all target keys, under lock
+        let notifiers: Vec<Arc<Notify>> = {
+            let mut store = list_store.write().unwrap();
+            lists.iter().map(|k| waiter_for(&mut store, k)).collect()
+        }; // lock for store dropped
+
+        // 2. Build& arm Notified futures before checking
+        let mut futs: Vec<_> = notifiers.iter().map(|n| Box::pin(n.notified())).collect();
+        for f in &mut futs {
+            f.as_mut().enable();
+        }
+
+        // 3. Try to pop - under lock, bruefly
+        {
+            let mut store = list_store.write().unwrap();
+            for k in &lists {
+                if let Some(list) = store.lists.get_mut(k) {
                     if let Some(head) = list.pop_front() {
-                        return Some((l.to_vec(), head));
+                        return Ok(Resp::Array(vec![
+                            Resp::BulkString(k.to_vec()),
+                            Resp::BulkString(head),
+                        ]));
                     }
                 }
             }
-        }
-    };
+        } // lock dropped
 
-    println!(
-        "[BLPOP] Starting, lists: {:?}, timeout: {:?}, t: {}",
-        lists, duration, t
-    );
-    match timeout(duration, future).await {
-        Ok(Some((list, head))) => Ok(Resp::Array(vec![
-            Resp::BulkString(list),
-            Resp::BulkString(head),
-        ])),
-        Ok(None) => Ok(Resp::Null),
-        Err(_) => Ok(Resp::Null),
+        // 4. Wait for any notifier with deadline
+        let any = futures::future::select_all(futs);
+        if t == 0.0 {
+            any.await;
+        } else {
+            match timeout(duration, any).await {
+                Ok(_) => continue,
+                Err(_) => return Ok(Resp::Null),
+            }
+        }
     }
 }
 
@@ -864,7 +901,10 @@ async fn main() {
     // Uncomment the code below to pass the first stage
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
     let store = Arc::new(RwLock::new(HashMap::new()));
-    let list_store = Arc::new(RwLock::new(HashMap::new()));
+    let list_store = Arc::new(RwLock::new(RedisListStore {
+        lists: HashMap::new(),
+        waiters: HashMap::new(),
+    }));
 
     for stream in listener.incoming() {
         match stream {
