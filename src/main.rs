@@ -6,8 +6,6 @@ use std::{
     error,
     fmt::{self, Debug, format},
     hash::Hash,
-    io::{BufRead, BufReader, Read, Write},
-    net::TcpListener,
     ops::{AddAssign, Mul, MulAssign, Neg},
     os::unix::process,
     result,
@@ -17,7 +15,12 @@ use std::{
     time::{Duration, Instant, SystemTime},
     usize,
 };
-use tokio::{sync::Notify, time::timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::Notify,
+    time::timeout,
+};
 
 type ByteString = Vec<u8>;
 
@@ -773,6 +776,7 @@ async fn process_list_blpop(
         "BLPOP: lists: {:?}, t: {:?}, duration: {:?}",
         lists, t, duration
     );
+
     loop {
         // 1, Get or create notifiers for all target keys, under lock
         let notifiers: Vec<Arc<Notify>> = {
@@ -903,49 +907,41 @@ async fn main() {
     println!("Logs from your program will appear here!");
 
     // Uncomment the code below to pass the first stage
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
     let store = Arc::new(RwLock::new(HashMap::new()));
     let list_store = Arc::new(RwLock::new(RedisListStore {
         lists: HashMap::new(),
         waiters: HashMap::new(),
     }));
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut _stream) => {
-                let store = Arc::clone(&store); //store.clone();
-                let list_store = Arc::clone(&list_store);
-                tokio::spawn(async move {
-                    println!("accepted new connection");
-                    let mut buffer = [0u8; 1024];
+    loop {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let store = Arc::clone(&store); //store.clone();
+        let list_store = Arc::clone(&list_store);
+        tokio::spawn(async move {
+            println!("accepted new connection");
+            let mut buffer = [0u8; 1024];
 
-                    while let Ok(n) = _stream.read(&mut buffer) {
-                        if n == 0 {
-                            break;
+            while let Ok(n) = stream.read(&mut buffer).await {
+                if n == 0 {
+                    break;
+                }
+                match parse_resp(&buffer) {
+                    Ok((command, _)) => match process_command(command, &store, &list_store).await {
+                        Ok(resp) => {
+                            println!("Response: {:?}", resp);
+                            let mut out = Vec::new();
+                            encode_resp(&resp, &mut out);
+                            let _ = stream.write_all(&out[..]).await;
                         }
-                        match parse_resp(&buffer) {
-                            Ok((command, _)) => {
-                                match process_command(command, &store, &list_store).await {
-                                    Ok(resp) => {
-                                        println!("Response: {:?}", resp);
-                                        let mut out = Vec::new();
-                                        encode_resp(&resp, &mut out);
-                                        let _ = _stream.write(&out[..]);
-                                    }
-                                    Err(error) => println!("Processing error: {:?}", error),
-                                }
-                            }
-                            Err(error) => println!("Parse error: {:?}", error),
-                        }
-                        //let _ = _stream.write(b"+PONG\r\n");
-                        let _ = _stream.flush();
-                        buffer.fill(0u8);
-                    }
-                });
+                        Err(error) => println!("Processing error: {:?}", error),
+                    },
+                    Err(error) => println!("Parse error: {:?}", error),
+                }
+                //let _ = _stream.write(b"+PONG\r\n");
+                let _ = stream.flush().await;
+                buffer.fill(0u8);
             }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
+        });
     }
 }
