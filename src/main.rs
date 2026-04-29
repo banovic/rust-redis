@@ -912,7 +912,8 @@ async fn process_xadd(
         // return Err(ParseError {
         //     message: "XADD: key already exists".to_string(),
         // });
-        return Ok(Resp::BulkString(b"Error 123".to_vec()));
+        //return Ok(Resp::BulkString(b"Error 123".to_vec()));
+        return Ok(Resp::Null);
     }
     if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
         if &key < latest {
