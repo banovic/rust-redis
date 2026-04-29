@@ -885,9 +885,9 @@ async fn process_xadd(
         }),
     }?;
     if key < (0, 1) {
-        return Err(ParseError {
-            message: "XADD key must be >= 0-1".to_string(),
-        });
+        return Ok(Resp::SimpleError(
+            b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
+        ));
     }
     if &args[2..].len() % 2 != 0 {
         return Err(ParseError {
@@ -921,9 +921,10 @@ async fn process_xadd(
     }
     if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
         if &key < latest {
-            return Err(ParseError {
-                message: "XADD: key must be increasing".to_string(),
-            });
+            return Ok(Resp::SimpleError(
+                b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
+                    .to_vec(),
+            ));
         }
     }
     store.streams.entry(name.to_vec()).and_modify(|bt| {
