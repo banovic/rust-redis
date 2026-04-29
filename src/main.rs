@@ -914,7 +914,7 @@ async fn process_xadd(
         });
     }
     if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
-        if &key > latest {
+        if &key < latest {
             return Err(ParseError {
                 message: "XADD: key must be increasing".to_string(),
             });
