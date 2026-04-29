@@ -30,6 +30,7 @@ enum Resp {
     Null,
     NullArray,
     SimpleString(Vec<u8>),
+    SimpleError(Vec<u8>),
     BulkString(Vec<u8>),
     Integer(i64),
     Array(Vec<Resp>),
@@ -912,8 +913,8 @@ async fn process_xadd(
         // return Err(ParseError {
         //     message: "XADD: key already exists".to_string(),
         // });
-        //return Ok(Resp::BulkString(b"Error 123".to_vec()));
-        return Ok(Resp::Null);
+        return Ok(Resp::SimpleError(b"Error 123".to_vec()));
+        //return Ok(Resp::Null);
     }
     if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
         if &key < latest {
@@ -995,6 +996,11 @@ fn encode_resp(r: &Resp, mut out: &mut Vec<u8>) {
         }
         Resp::SimpleString(value) => {
             write_bytes(&mut out, &[b'+']);
+            write_bytes(&mut out, &value[..]);
+            write_bytes(&mut out, &[b'\r', b'\n']);
+        }
+        Resp::SimpleError(value) => {
+            write_bytes(&mut out, &[b'-']);
             write_bytes(&mut out, &value[..]);
             write_bytes(&mut out, &[b'\r', b'\n']);
         }
