@@ -909,9 +909,10 @@ async fn process_xadd(
     // let mut new_btree_map: BTreeMap<(u64, u64), Vec<Vec<u8>>> = BTreeMap::new();
     // let stream = store.streams.get_mut(name).unwrap_or(&mut new_btree_map);
     if store.streams.get(name).unwrap().contains_key(&key) {
-        return Err(ParseError {
-            message: "XADD: key already exists".to_string(),
-        });
+        // return Err(ParseError {
+        //     message: "XADD: key already exists".to_string(),
+        // });
+        return Ok(Resp::SimpleString(b"Error 123".to_vec()));
     }
     if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
         if &key < latest {
