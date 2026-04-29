@@ -902,22 +902,30 @@ async fn process_xadd(
         .collect::<Vec<_>>();
 
     let mut store = stream_store.write().await;
-
-    let mut new_btree_map: BTreeMap<(u64, u64), Vec<Vec<u8>>> = BTreeMap::new();
-    let stream = store.streams.get_mut(name).unwrap_or(&mut new_btree_map);
-    if stream.contains_key(&key) {
+    store
+        .streams
+        .entry(name.to_vec())
+        .or_insert(BTreeMap::new());
+    // let mut new_btree_map: BTreeMap<(u64, u64), Vec<Vec<u8>>> = BTreeMap::new();
+    // let stream = store.streams.get_mut(name).unwrap_or(&mut new_btree_map);
+    if store.streams.get(name).unwrap().contains_key(&key) {
         return Err(ParseError {
             message: "XADD: key already exists".to_string(),
         });
     }
-    if let Some(latest) = stream.last_entry() {
-        if &key > latest.key() {
+    if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
+        if &key > latest {
             return Err(ParseError {
                 message: "XADD: key must be increasing".to_string(),
             });
         }
     }
-    store.streams.get_mut(name).unwrap().insert(key, values);
+    store.streams.entry(name.to_vec()).and_modify(|bt| {
+        (*bt).insert(key, values);
+    });
+    // //store.streams.get_mut(name).unwrap().insert(key, values);
+    // stream.insert(key, values);
+    // store.streams.insert(name.to_vec(), stream);
     Ok(Resp::BulkString(id.to_vec()))
 }
 
