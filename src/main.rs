@@ -431,7 +431,11 @@ fn next_stream_id(ski: StreamIdInputSpec, stream: &RedisStream) -> Option<(u64, 
                     None
                 }
             } else {
-                Some((tid, 0))
+                if tid == 0 {
+                    Some((tid, 1))
+                } else {
+                    Some((tid, 0))
+                }
             }
         }
         StreamIdInputSpec::AugoGen => None,
