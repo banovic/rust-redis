@@ -972,7 +972,9 @@ async fn process_xadd(
     store.streams.entry(key.to_vec()).and_modify(|bt| {
         (*bt).insert((tid, sid), values);
     });
-    Ok(Resp::BulkString(id.to_vec()))
+    Ok(Resp::BulkString(
+        format!("{}-{}", tid, sid).as_bytes().to_vec(),
+    ))
 }
 
 async fn process_command(
