@@ -3,7 +3,7 @@ use core::str;
 use futures::future::select_all;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    error,
+    error::{self, Error},
     fmt::{self, Debug, format},
     hash::Hash,
     ops::{AddAssign, Mul, MulAssign, Neg},
@@ -58,13 +58,6 @@ fn waiter_for(store: &mut RedisListStore, key: &[u8]) -> Arc<Notify> {
         .entry(key.to_vec())
         .or_insert_with(|| Arc::new(Notify::new()))
         .clone()
-}
-
-// milliseconds-seqeunce id
-type StreamKey = (u64, u64);
-type RedisStream = BTreeMap<Vec<u8>, Vec<u8>>;
-struct RedisStreamStore {
-    streams: HashMap<Vec<u8>, BTreeMap<StreamKey, Vec<Vec<u8>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -400,6 +393,54 @@ where
         }?;
         Ok((n, rest))
     }
+}
+
+// milliseconds-seqeunce id
+enum StreamIdInputSpec {
+    Explicit(u64, u64),
+    AutoGenSeq(u64),
+    AugoGen,
+}
+type StreamKey = (u64, u64);
+
+fn parse_input_stream_id<'a>(id: &'a Vec<u8>) -> Option<StreamIdInputSpec> {
+    match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
+        Ok(((tid, _, sid), _)) => Some(StreamIdInputSpec::Explicit(tid, sid)),
+        _ => match and!(integer::<u64>(), byte(b'-'), byte(b'*')).parse(id) {
+            Ok(((tid, _, _), _)) => Some(StreamIdInputSpec::AutoGenSeq(tid)),
+            _ => match byte(b'*').parse(id) {
+                Ok(_) => Some(StreamIdInputSpec::AugoGen),
+                _ => None,
+            },
+        },
+    }
+}
+
+fn next_stream_id(ski: StreamIdInputSpec, stream: &RedisStream) -> Option<(u64, u64)> {
+    let latest = stream.last_key_value();
+    match ski {
+        StreamIdInputSpec::Explicit(tid, sid) => Some((tid, sid)),
+        StreamIdInputSpec::AutoGenSeq(tid) => {
+            if latest.is_some() {
+                let (&(orig_tid, orig_sid), _) = latest.unwrap();
+                if tid > orig_tid {
+                    Some((tid, 0))
+                } else if tid == orig_tid {
+                    Some((tid, orig_sid + 1))
+                } else {
+                    None
+                }
+            } else {
+                Some((tid, 0))
+            }
+        }
+        StreamIdInputSpec::AugoGen => None,
+    }
+}
+
+type RedisStream = BTreeMap<StreamKey, Vec<Vec<u8>>>;
+struct RedisStreamStore {
+    streams: HashMap<Vec<u8>, BTreeMap<StreamKey, Vec<Vec<u8>>>>,
 }
 
 /// APP PARSERS
@@ -856,13 +897,6 @@ async fn process_type(
     Ok(Resp::SimpleString(b"none".to_vec()))
 }
 
-fn parse_stream_key<'a>(id: &'a Vec<u8>) -> Option<StreamKey> {
-    match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
-        Ok(((mid, _, sid), _)) => Some((mid, sid)),
-        _ => None,
-    }
-}
-
 async fn process_xadd(
     args: &[Resp],
     stream_store: &Arc<RwLock<RedisStreamStore>>,
@@ -872,23 +906,18 @@ async fn process_xadd(
             message: "Unsupported XADD command shape".to_string(),
         });
     }
-    let (name, id) = match (&args[0], &args[1]) {
+    let (key, id) = match (&args[0], &args[1]) {
         (Resp::BulkString(n), Resp::BulkString(i)) => Ok((n, i)),
         _ => Err(ParseError {
             message: "Unsupported XADD command shape".to_string(),
         }),
     }?;
-    let key = match parse_stream_key(id) {
+    let ski = match parse_input_stream_id(id) {
         Some(k) => Ok(k),
         _ => Err(ParseError {
             message: "Unsupported XADD <id> key shape".to_string(),
         }),
     }?;
-    if key < (0, 1) {
-        return Ok(Resp::SimpleError(
-            b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
-        ));
-    }
     if &args[2..].len() % 2 != 0 {
         return Err(ParseError {
             message: "Unsupported XADD command shape".to_string(),
@@ -903,36 +932,42 @@ async fn process_xadd(
         .collect::<Vec<_>>();
 
     let mut store = stream_store.write().await;
-    store
-        .streams
-        .entry(name.to_vec())
-        .or_insert(BTreeMap::new());
-    // let mut new_btree_map: BTreeMap<(u64, u64), Vec<Vec<u8>>> = BTreeMap::new();
-    // let stream = store.streams.get_mut(name).unwrap_or(&mut new_btree_map);
-    if store.streams.get(name).unwrap().contains_key(&key) {
-        // return Err(ParseError {
-        //     message: "XADD: key already exists".to_string(),
-        // });
+
+    // Ensure that there is stream `key`:
+    store.streams.entry(key.to_vec()).or_insert(BTreeMap::new());
+
+    let (tid, sid) = match next_stream_id(ski, store.streams.get(key).unwrap()) {
+        Some(id) => id,
+        _ => {
+            return Ok(Resp::SimpleError(
+                b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
+            ));
+        }
+    };
+
+    if (tid, sid) < (0, 1) {
+        return Ok(Resp::SimpleError(
+            b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
+        ));
+    }
+
+    if store.streams.get(key).unwrap().contains_key(&(tid, sid)) {
         return Ok(Resp::SimpleError(
             b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
                 .to_vec(),
         ));
-        //return Ok(Resp::Null);
     }
-    if let Some((latest, _)) = store.streams.get(name).unwrap().last_key_value() {
-        if &key < latest {
+    if let Some((latest, _)) = store.streams.get(key).unwrap().last_key_value() {
+        if &(tid, sid) < latest {
             return Ok(Resp::SimpleError(
                 b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
                     .to_vec(),
             ));
         }
     }
-    store.streams.entry(name.to_vec()).and_modify(|bt| {
-        (*bt).insert(key, values);
+    store.streams.entry(key.to_vec()).and_modify(|bt| {
+        (*bt).insert((tid, sid), values);
     });
-    // //store.streams.get_mut(name).unwrap().insert(key, values);
-    // stream.insert(key, values);
-    // store.streams.insert(name.to_vec(), stream);
     Ok(Resp::BulkString(id.to_vec()))
 }
 
