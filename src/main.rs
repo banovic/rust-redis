@@ -1050,7 +1050,7 @@ async fn process_xread(
     }
     let (key, id) = match (&args[0], &args[1], &args[2]) {
         (Resp::BulkString(word), Resp::BulkString(key), Resp::BulkString(id)) => {
-            let _ = tag(b"STREAMS").parse(&word)?;
+            let _ = tag_no_case(b"STREAMS").parse(&word)?;
             let ((tid, _, sid), _) =
                 and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id)?;
             Ok((key, (tid, sid)))
