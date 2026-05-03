@@ -12,7 +12,7 @@ use std::{
     str::{FromStr, from_utf8},
     sync::Arc,
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     usize,
 };
 use tokio::{
@@ -438,7 +438,19 @@ fn next_stream_id(ski: StreamIdInputSpec, stream: &RedisStream) -> Option<(u64, 
                 }
             }
         }
-        StreamIdInputSpec::AugoGen => None,
+        StreamIdInputSpec::AugoGen => {
+            let tid = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_millis() as u64;
+            match latest {
+                Some((&(orig_tid, _), _)) if orig_tid < tid => Some((tid, 0)),
+                Some((&(orig_tid, orig_sid), _)) if orig_tid == tid => Some((tid, orig_sid + 1)),
+                Some((&(orig_tid, _), _)) if orig_tid > tid => None,
+                None => Some((tid, 0)),
+                _ => panic!("No idea?"),
+            }
+        }
     }
 }
 
