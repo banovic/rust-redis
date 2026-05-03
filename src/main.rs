@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 use core::str;
 use futures::future::select_all;
+use std::ops::Bound::Included;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     error::{self, Error},
@@ -198,7 +199,7 @@ macro_rules! and {
     ($p1: expr, $p2: expr $(,)?) => {{
         let p1 = $p1;
         let p2 = $p2;
-        move |input: ParserInput<'a>| {
+        move |input| {
             let (a, rest) = p1.parse(input)?;
             let (b, rest) = p2.parse(rest)?;
             Ok(((a, b), rest))
@@ -209,7 +210,7 @@ macro_rules! and {
         let p1 = $p1;
         let p2 = $p2;
         let p3 = $p3;
-        move |input: ParserInput<'a>| {
+        move |input| {
             let (a, rest) = p1.parse(input)?;
             let (b, rest) = p2.parse(rest)?;
             let (c, rest) = p3.parse(rest)?;
@@ -222,7 +223,7 @@ macro_rules! and {
         let p2 = $p2;
         let p3 = $p3;
         let p4 = $p4;
-        move |input: ParserInput<'a>| {
+        move |input| {
             let (a, rest) = p1.parse(input)?;
             let (b, rest) = p2.parse(rest)?;
             let (c, rest) = p3.parse(rest)?;
@@ -237,7 +238,7 @@ macro_rules! and {
         let p3 = $p3;
         let p4 = $p4;
         let p5 = $p5;
-        move |input: ParserInput<'a>| {
+        move |input| {
             let (a, rest) = p1.parse(input)?;
             let (b, rest) = p2.parse(rest)?;
             let (c, rest) = p3.parse(rest)?;
@@ -254,7 +255,7 @@ macro_rules! and {
         let p4 = $p4;
         let p5 = $p5;
         let p6 = $p6;
-        move |input: ParserInput<'a>| {
+        move |input| {
             let (a, rest) = p1.parse(input)?;
             let (b, rest) = p2.parse(rest)?;
             let (c, rest) = p3.parse(rest)?;
@@ -273,7 +274,7 @@ macro_rules! and {
         let p5 = $p5;
         let p6 = $p6;
         let p7 = $p7;
-        move |input: ParserInput<'a>| {
+        move |input| {
             let (a, rest) = p1.parse(input)?;
             let (b, rest) = p2.parse(rest)?;
             let (c, rest) = p3.parse(rest)?;
@@ -290,7 +291,7 @@ macro_rules! or {
     ($p1: expr, $p2: expr $(,)?) => {{
         let p1 = $p1;
         let p2 = $p2;
-        move |input: ParserInput<'a>| match p1.parse(input) {
+        move |input| match p1.parse(input) {
             Ok(result) => Ok(result),
             _ => p2.parse(input),
         }
@@ -300,7 +301,7 @@ macro_rules! or {
         let p1 = $p1;
         let p2 = $p2;
         let p3 = $p3;
-        move |input: ParserInput<'a>| match p1.parse(input) {
+        move |input| match p1.parse(input) {
             Ok(result) => Ok(result),
             _ => match p2.parse(input) {
                 Ok(result) => Ok(result),
@@ -314,7 +315,7 @@ macro_rules! or {
         let p2 = $p2;
         let p3 = $p3;
         let p4 = $p4;
-        move |input: ParserInput<'a>| match p1.parse(input) {
+        move |input| match p1.parse(input) {
             Ok(result) => Ok(result),
             _ => match p2.parse(input) {
                 Ok(result) => Ok(result),
@@ -989,6 +990,45 @@ async fn process_xadd(
     ))
 }
 
+async fn process_xrange(
+    args: &[Resp],
+    stream_store: &Arc<RwLock<RedisStreamStore>>,
+) -> Result<Resp, ParseError> {
+    let (key, start, end) = match (&args[0], &args[1], &args[2]) {
+        (Resp::BulkString(key), Resp::BulkString(start), Resp::BulkString(end)) => {
+            let ((start_tid, _, start_sid), _) =
+                and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(start)?;
+            let ((end_tid, _, end_sid), _) =
+                and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(end)?;
+            Ok((key, (start_tid, start_sid), (end_tid, end_sid)))
+        }
+        _ => Err(ParseError {
+            message: "Unsupported XRANGE command shape".to_string(),
+        }),
+    }?;
+    let stream_store = stream_store.read().await;
+    let stream = match stream_store.streams.get(key) {
+        Some(stream) => Ok(stream),
+        _ => Err(ParseError {
+            message: format!("Stream not found, XRANGE: {:?}", key),
+        }),
+    }?;
+    let mut data: Vec<Resp> = Vec::new();
+    for (&k, v) in stream.range((Included(&start), Included(&end))) {
+        let mut row: Vec<Resp> = Vec::new();
+        row.push(Resp::BulkString(
+            format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
+        ));
+        row.push(Resp::Array(
+            v.iter()
+                .map(|s| Resp::BulkString(s.to_vec()))
+                .collect::<Vec<_>>(),
+        ));
+        data.push(Resp::Array(row));
+    }
+    Ok(Resp::Array(data))
+}
+
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -1015,6 +1055,7 @@ async fn process_command(
                         // Streams
                         b"TYPE" => process_type(args, store, list_store, stream_store).await,
                         b"XADD" => process_xadd(args, stream_store).await,
+                        b"XRANGE" => process_xrange(args, stream_store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
