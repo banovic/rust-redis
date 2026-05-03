@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 use core::str;
 use futures::future::select_all;
-use std::ops::Bound::Included;
+use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     error::{self, Error},
@@ -1039,6 +1039,60 @@ async fn process_xrange(
     Ok(Resp::Array(data))
 }
 
+async fn process_xread(
+    args: &[Resp],
+    stream_store: &Arc<RwLock<RedisStreamStore>>,
+) -> Result<Resp, ParseError> {
+    if args.len() < 3 {
+        return Err(ParseError {
+            message: "Unsupported XREAD command shape".to_string(),
+        });
+    }
+    let (key, id) = match (&args[0], &args[1], &args[2]) {
+        (Resp::BulkString(word), Resp::BulkString(key), Resp::BulkString(id)) => {
+            let _ = tag(b"STREAMS").parse(&word)?;
+            let ((tid, _, sid), _) =
+                and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id)?;
+            Ok((key, (tid, sid)))
+        }
+        _ => Err(ParseError {
+            message: "Unsupported XREAD command shape".to_string(),
+        }),
+    }?;
+
+    let stream_store = stream_store.read().await;
+
+    let mut data: Vec<Resp> = Vec::new();
+
+    let mut stream_data: Vec<Resp> = Vec::new();
+
+    let stream = match stream_store.streams.get(key) {
+        Some(stream) => Ok(stream),
+        _ => Err(ParseError {
+            message: format!("Stream not found, XREAD: {:?}", key),
+        }),
+    }?;
+
+    stream_data.push(Resp::BulkString(key.to_vec()));
+
+    for (&k, v) in stream.range((Excluded(&id), Unbounded)) {
+        let mut row: Vec<Resp> = Vec::new();
+        row.push(Resp::BulkString(
+            format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
+        ));
+        row.push(Resp::Array(
+            v.iter()
+                .map(|s| Resp::BulkString(s.to_vec()))
+                .collect::<Vec<_>>(),
+        ));
+        stream_data.push(Resp::Array(row));
+    }
+
+    data.push(Resp::Array(stream_data));
+
+    Ok(Resp::Array(data))
+}
+
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -1066,6 +1120,7 @@ async fn process_command(
                         b"TYPE" => process_type(args, store, list_store, stream_store).await,
                         b"XADD" => process_xadd(args, stream_store).await,
                         b"XRANGE" => process_xrange(args, stream_store).await,
+                        b"XREAD" => process_xread(args, stream_store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
