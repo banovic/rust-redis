@@ -1003,7 +1003,7 @@ async fn process_xrange(
                     and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(start)?;
                 (start_tid, start_sid)
             };
-            let (end_tid, end_sid) = if false {
+            let (end_tid, end_sid) = if end.len() == 1 && end[0] == b'+' {
                 (u64::MAX, u64::MAX)
             } else {
                 let ((end_tid, _, end_sid), _) =
