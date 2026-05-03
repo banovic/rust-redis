@@ -1075,6 +1075,8 @@ async fn process_xread(
 
     stream_data.push(Resp::BulkString(key.to_vec()));
 
+    let mut stream_row_data: Vec<Resp> = Vec::new();
+
     for (&k, v) in stream.range((Excluded(&id), Unbounded)) {
         let mut row: Vec<Resp> = Vec::new();
         row.push(Resp::BulkString(
@@ -1085,8 +1087,11 @@ async fn process_xread(
                 .map(|s| Resp::BulkString(s.to_vec()))
                 .collect::<Vec<_>>(),
         ));
-        stream_data.push(Resp::Array(row));
+
+        stream_row_data.push(Resp::Array(row));
     }
+
+    stream_data.push(Resp::Array(stream_row_data));
 
     data.push(Resp::Array(stream_data));
 
