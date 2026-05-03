@@ -996,7 +996,7 @@ async fn process_xrange(
 ) -> Result<Resp, ParseError> {
     let (key, start, end) = match (&args[0], &args[1], &args[2]) {
         (Resp::BulkString(key), Resp::BulkString(start), Resp::BulkString(end)) => {
-            let (start_sid, start_tid) = if start.len() == 1 && start[0] == b'-' {
+            let (start_tid, start_sid) = if start.len() == 1 && start[0] == b'-' {
                 (0, 1)
             } else {
                 let ((start_tid, _, start_sid), _) =
