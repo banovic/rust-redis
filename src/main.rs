@@ -996,10 +996,20 @@ async fn process_xrange(
 ) -> Result<Resp, ParseError> {
     let (key, start, end) = match (&args[0], &args[1], &args[2]) {
         (Resp::BulkString(key), Resp::BulkString(start), Resp::BulkString(end)) => {
-            let ((start_tid, _, start_sid), _) =
-                and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(start)?;
-            let ((end_tid, _, end_sid), _) =
-                and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(end)?;
+            let (start_sid, start_tid) = if start.len() == 1 && start[0] == b'-' {
+                (0, 1)
+            } else {
+                let ((start_tid, _, start_sid), _) =
+                    and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(start)?;
+                (start_tid, start_sid)
+            };
+            let (end_tid, end_sid) = if false {
+                (u64::MAX, u64::MAX)
+            } else {
+                let ((end_tid, _, end_sid), _) =
+                    and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(end)?;
+                (end_tid, end_sid)
+            };
             Ok((key, (start_tid, start_sid), (end_tid, end_sid)))
         }
         _ => Err(ParseError {
