@@ -1067,14 +1067,14 @@ async fn process_xread(
             message: "Unsupported XREAD command shape".to_string(),
         });
     }
-    let keys = args[1..(l / 2)]
+    let keys = args[1..(1 + (l / 2))]
         .iter()
         .flat_map(|r| match r {
             Resp::BulkString(k) => Some(k),
             _ => None,
         })
         .collect::<Vec<_>>();
-    let ids = args[(l / 2)..]
+    let ids = args[(1 + (l / 2))..]
         .iter()
         .flat_map(|r| match r {
             Resp::BulkString(id) => Some(id),
