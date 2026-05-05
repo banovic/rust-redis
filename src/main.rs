@@ -1048,52 +1048,83 @@ async fn process_xread(
             message: "Unsupported XREAD command shape".to_string(),
         });
     }
-    let (key, id) = match (&args[0], &args[1], &args[2]) {
-        (Resp::BulkString(word), Resp::BulkString(key), Resp::BulkString(id)) => {
-            let _ = tag_no_case(b"STREAMS").parse(&word)?;
-            let ((tid, _, sid), _) =
-                and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id)?;
-            Ok((key, (tid, sid)))
-        }
+    // STREAMS
+    let Resp::BulkString(kw1) = &args[0] else {
+        return Err(ParseError {
+            message: "Unsupported XREAD command shape".to_string(),
+        });
+    };
+    let _ = match tag_no_case(b"STREAMS").parse(&kw1) {
+        Ok(_) => Ok(()),
         _ => Err(ParseError {
             message: "Unsupported XREAD command shape".to_string(),
         }),
     }?;
+    // keys
+    let l = args[1..].len();
+    if l % 2 != 0 {
+        return Err(ParseError {
+            message: "Unsupported XREAD command shape".to_string(),
+        });
+    }
+    let keys = args[1..l]
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(k) => Some(k),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let ids = args[l..]
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(id) => Some(id),
+            _ => None,
+        })
+        .flat_map(
+            |id| match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
+                Ok(((tid, _, sid), _)) => Some((tid, sid)),
+                _ => None,
+            },
+        )
+        .collect::<Vec<_>>();
+    assert!(keys.len() == ids.len());
 
     let stream_store = stream_store.read().await;
 
     let mut data: Vec<Resp> = Vec::new();
 
-    let mut stream_data: Vec<Resp> = Vec::new();
+    for (i, &key) in keys.iter().enumerate() {
+        let mut stream_data: Vec<Resp> = Vec::new();
 
-    let stream = match stream_store.streams.get(key) {
-        Some(stream) => Ok(stream),
-        _ => Err(ParseError {
-            message: format!("Stream not found, XREAD: {:?}", key),
-        }),
-    }?;
+        let stream = match stream_store.streams.get(key) {
+            Some(stream) => Ok(stream),
+            _ => Err(ParseError {
+                message: format!("Stream not found, XREAD: {:?}", key),
+            }),
+        }?;
 
-    stream_data.push(Resp::BulkString(key.to_vec()));
+        stream_data.push(Resp::BulkString(key.to_vec()));
 
-    let mut stream_row_data: Vec<Resp> = Vec::new();
+        let mut stream_row_data: Vec<Resp> = Vec::new();
 
-    for (&k, v) in stream.range((Excluded(&id), Unbounded)) {
-        let mut row: Vec<Resp> = Vec::new();
-        row.push(Resp::BulkString(
-            format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
-        ));
-        row.push(Resp::Array(
-            v.iter()
-                .map(|s| Resp::BulkString(s.to_vec()))
-                .collect::<Vec<_>>(),
-        ));
+        for (&k, v) in stream.range((Excluded(&ids[i]), Unbounded)) {
+            let mut row: Vec<Resp> = Vec::new();
+            row.push(Resp::BulkString(
+                format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
+            ));
+            row.push(Resp::Array(
+                v.iter()
+                    .map(|s| Resp::BulkString(s.to_vec()))
+                    .collect::<Vec<_>>(),
+            ));
 
-        stream_row_data.push(Resp::Array(row));
+            stream_row_data.push(Resp::Array(row));
+        }
+
+        stream_data.push(Resp::Array(stream_row_data));
+
+        data.push(Resp::Array(stream_data));
     }
-
-    stream_data.push(Resp::Array(stream_row_data));
-
-    data.push(Resp::Array(stream_data));
 
     Ok(Resp::Array(data))
 }
