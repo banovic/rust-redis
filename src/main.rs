@@ -458,6 +458,15 @@ fn next_stream_id(ski: StreamIdInputSpec, stream: &RedisStream) -> Option<(u64, 
 type RedisStream = BTreeMap<StreamKey, Vec<Vec<u8>>>;
 struct RedisStreamStore {
     streams: HashMap<Vec<u8>, BTreeMap<StreamKey, Vec<Vec<u8>>>>,
+    waiters: HashMap<ByteString, Arc<Notify>>,
+}
+
+fn stream_waiter_for(store: &mut RedisStreamStore, key: &[u8]) -> Arc<Notify> {
+    store
+        .waiters
+        .entry(key.to_vec())
+        .or_insert_with(|| Arc::new(Notify::new()))
+        .clone()
 }
 
 /// APP PARSERS
@@ -1039,27 +1048,50 @@ async fn process_xrange(
     Ok(Resp::Array(data))
 }
 
+fn cmp_bytes_no_case(a: &Vec<u8>, b: &[u8]) -> bool {
+    a.to_ascii_uppercase() != b.to_ascii_uppercase()
+}
+
+fn cmp_resp_bytes_no_case(a: &Resp, b: &[u8]) -> bool {
+    match a {
+        Resp::BulkString(sv) => sv.to_ascii_uppercase() != b.to_ascii_uppercase(),
+        _ => false,
+    }
+}
+
 async fn process_xread(
     args: &[Resp],
     stream_store: &Arc<RwLock<RedisStreamStore>>,
 ) -> Result<Resp, ParseError> {
+    let args2 = args
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(sv) => Some(sv),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     if args.len() < 3 {
         return Err(ParseError {
             message: "Unsupported XREAD command shape".to_string(),
         });
     }
     // STREAMS
-    let Resp::BulkString(kw1) = &args[0] else {
+    // let Resp::BulkString(kw1) = &args[0] else {
+    //     return Err(ParseError {
+    //         message: "Unsupported XREAD command shape".to_string(),
+    //     });
+    // };
+    if !cmp_resp_bytes_no_case(&args[0], b"STREAMS") {
         return Err(ParseError {
             message: "Unsupported XREAD command shape".to_string(),
         });
-    };
-    let _ = match tag_no_case(b"STREAMS").parse(&kw1) {
-        Ok(_) => Ok(()),
-        _ => Err(ParseError {
-            message: "Unsupported XREAD command shape".to_string(),
-        }),
-    }?;
+    }
+    // let _ = match tag_no_case(b"STREAMS").parse(&kw1) {
+    //     Ok(_) => Ok(()),
+    //     _ => Err(ParseError {
+    //         message: "Unsupported XREAD command shape".to_string(),
+    //     }),
+    // }?;
     // keys
     let l = args[1..].len();
     if l % 2 != 0 {
@@ -1240,6 +1272,7 @@ async fn main() {
     }));
     let stream_store = Arc::new(RwLock::new(RedisStreamStore {
         streams: HashMap::new(),
+        waiters: HashMap::new(),
     }));
 
     loop {
