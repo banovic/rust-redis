@@ -994,6 +994,10 @@ async fn process_xadd(
     store.streams.entry(key.to_vec()).and_modify(|bt| {
         (*bt).insert((tid, sid), values);
     });
+
+    let notifier = stream_waiter_for(&mut store, key);
+    notifier.notify_waiters();
+
     Ok(Resp::BulkString(
         format!("{}-{}", tid, sid).as_bytes().to_vec(),
     ))
@@ -1059,87 +1063,30 @@ fn cmp_resp_bytes_no_case(a: &Resp, b: &[u8]) -> bool {
     }
 }
 
-async fn process_xread(
-    args: &[Resp],
+async fn process_xread_fetch_data(
     stream_store: &Arc<RwLock<RedisStreamStore>>,
-) -> Result<Resp, ParseError> {
-    let args2 = args
-        .iter()
-        .flat_map(|r| match r {
-            Resp::BulkString(sv) => Some(sv),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if args.len() < 3 {
-        return Err(ParseError {
-            message: "Unsupported XREAD command shape".to_string(),
-        });
-    }
-    // STREAMS
-    // let Resp::BulkString(kw1) = &args[0] else {
-    //     return Err(ParseError {
-    //         message: "Unsupported XREAD command shape".to_string(),
-    //     });
-    // };
-    if !cmp_resp_bytes_no_case(&args[0], b"STREAMS") {
-        return Err(ParseError {
-            message: "Unsupported XREAD command shape".to_string(),
-        });
-    }
-    // let _ = match tag_no_case(b"STREAMS").parse(&kw1) {
-    //     Ok(_) => Ok(()),
-    //     _ => Err(ParseError {
-    //         message: "Unsupported XREAD command shape".to_string(),
-    //     }),
-    // }?;
-    // keys
-    let l = args[1..].len();
-    if l % 2 != 0 {
-        return Err(ParseError {
-            message: "Unsupported XREAD command shape".to_string(),
-        });
-    }
-    let keys = args[1..(1 + (l / 2))]
-        .iter()
-        .flat_map(|r| match r {
-            Resp::BulkString(k) => Some(k),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let ids = args[(1 + (l / 2))..]
-        .iter()
-        .flat_map(|r| match r {
-            Resp::BulkString(id) => Some(id),
-            _ => None,
-        })
-        .flat_map(
-            |id| match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
-                Ok(((tid, _, sid), _)) => Some((tid, sid)),
-                _ => None,
-            },
-        )
-        .collect::<Vec<_>>();
-    assert!(keys.len() == ids.len());
-
+    keys: &[&Vec<u8>],
+    ids: &Vec<(u64, u64)>,
+) -> (Resp, bool) {
     let stream_store = stream_store.read().await;
 
     let mut data: Vec<Resp> = Vec::new();
+    let mut is_empty = true;
 
     for (i, &key) in keys.iter().enumerate() {
         let mut stream_data: Vec<Resp> = Vec::new();
 
         let stream = match stream_store.streams.get(key) {
-            Some(stream) => Ok(stream),
-            _ => Err(ParseError {
-                message: format!("Stream not found, XREAD: {:?}", key),
-            }),
-        }?;
+            Some(stream) => stream,
+            _ => continue,
+        };
 
         stream_data.push(Resp::BulkString(key.to_vec()));
 
         let mut stream_row_data: Vec<Resp> = Vec::new();
 
         for (&k, v) in stream.range((Excluded(&ids[i]), Unbounded)) {
+            is_empty = false;
             let mut row: Vec<Resp> = Vec::new();
             row.push(Resp::BulkString(
                 format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
@@ -1158,7 +1105,111 @@ async fn process_xread(
         data.push(Resp::Array(stream_data));
     }
 
-    Ok(Resp::Array(data))
+    return (Resp::Array(data), is_empty);
+}
+
+async fn process_xread(
+    args: &[Resp],
+    stream_store: &Arc<RwLock<RedisStreamStore>>,
+) -> Result<Resp, ParseError> {
+    let mut argc = 0_usize;
+    let args2 = args
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(sv) => Some(sv),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // if args.len() < 3 {
+    //     return Err(ParseError {
+    //         message: "Unsupported XREAD command shape".to_string(),
+    //     });
+    // }
+    // let block = cmp_resp_bytes_no_case(&args[0], b"BLOCK");
+    let block = args2[argc].to_ascii_uppercase() == b"BLOCK";
+    let ms = if block {
+        argc += 1; // BLOCK
+        let (ms, _) = integer::<u64>().parse(&args2[argc])?;
+        argc += 1; // <millisecs>
+        Duration::from_millis(ms)
+    } else {
+        panic!()
+    };
+    if args2[argc].to_ascii_uppercase() != b"STREAMS" {
+        return Err(ParseError {
+            message: "Unsupported XREAD command shape".to_string(),
+        });
+    }
+    argc += 1; // STREAMS
+
+    // keys
+    let l = args2[argc..].len();
+    if l % 2 != 0 {
+        return Err(ParseError {
+            message: "Unsupported XREAD command shape".to_string(),
+        });
+    }
+    let keys = &args2[argc..(argc + (l / 2))];
+    // ids
+    let ids = args2[(argc + (l / 2))..]
+        .iter()
+        .flat_map(
+            |id| match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
+                Ok(((tid, _, sid), _)) => Some((tid, sid)),
+                _ => None,
+            },
+        )
+        .collect::<Vec<_>>();
+
+    assert!(keys.len() == ids.len());
+
+    if block {
+        loop {
+            // 1, Get or create notifiers for all target keys, under lock
+            let notifiers: Vec<Arc<Notify>> = {
+                let mut store = stream_store.write().await;
+                keys.iter()
+                    .map(|k| stream_waiter_for(&mut store, k))
+                    .collect()
+            }; // lock for store dropped
+
+            // 2. Build& arm Notified futures before checking
+            let mut futs: Vec<_> = notifiers.iter().map(|n| Box::pin(n.notified())).collect();
+            for f in &mut futs {
+                f.as_mut().enable();
+            }
+
+            // 3. Try to pop - under lock, bruefly
+            {
+                if let (data, is_empty) = process_xread_fetch_data(stream_store, keys, &ids).await {
+                    if !is_empty {
+                        return Ok(data);
+                    }
+                }
+                // let mut store = stream_store.write().await;
+                // for (j, &k) in keys.iter().enumerate() {
+                //     if let Some(s) = store.streams.get(k) {
+                //         if let Some(data) = s.range(Included(ids[j]), Unbounded) {
+                //             return Ok(Resp::Array(vec![
+                //                 Resp::BulkString(k.to_vec()),
+                //                 Resp::BulkString(head),
+                //             ]));
+                //         }
+                //     }
+                // }
+            } // lock dropped
+
+            // 4. Wait for any notifier with deadline
+            let any = futures::future::select_all(futs);
+            match timeout(ms, any).await {
+                Ok(_) => continue,
+                Err(_) => return Ok(Resp::NullArray),
+            }
+        }
+    } else {
+        let (data, _) = process_xread_fetch_data(stream_store, keys, &ids).await;
+        Ok(data)
+    }
 }
 
 async fn process_command(
