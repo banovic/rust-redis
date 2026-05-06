@@ -1127,14 +1127,19 @@ async fn process_xread(
     // }
     // let block = cmp_resp_bytes_no_case(&args[0], b"BLOCK");
     let block = args2[argc].to_ascii_uppercase() == b"BLOCK";
-    let ms = if block {
+    let duration = if block {
         argc += 1; // BLOCK
         let (ms, _) = integer::<u64>().parse(&args2[argc])?;
         argc += 1; // <millisecs>
-        Duration::from_millis(ms)
+        if ms == 0 {
+            Duration::from_millis(u64::MAX)
+        } else {
+            Duration::from_millis(ms)
+        }
     } else {
-        Duration::from_hours(0)
+        Duration::from_hours(1)
     };
+
     if args2[argc].to_ascii_uppercase() != b"STREAMS" {
         return Err(ParseError {
             message: "Unsupported XREAD command shape".to_string(),
@@ -1201,7 +1206,7 @@ async fn process_xread(
 
             // 4. Wait for any notifier with deadline
             let any = futures::future::select_all(futs);
-            match timeout(ms, any).await {
+            match timeout(duration, any).await {
                 Ok(_) => continue,
                 Err(_) => return Ok(Resp::NullArray),
             }
