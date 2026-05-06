@@ -1133,7 +1133,7 @@ async fn process_xread(
         argc += 1; // <millisecs>
         Duration::from_millis(ms)
     } else {
-        panic!()
+        Duration::from_hours(0)
     };
     if args2[argc].to_ascii_uppercase() != b"STREAMS" {
         return Err(ParseError {
