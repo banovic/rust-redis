@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     usize,
 };
+use tokio::stream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -1156,15 +1157,29 @@ async fn process_xread(
     }
     let keys = &args2[argc..(argc + (l / 2))];
     // ids
-    let ids = args2[(argc + (l / 2))..]
-        .iter()
-        .flat_map(
-            |id| match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
-                Ok(((tid, _, sid), _)) => Some((tid, sid)),
-                _ => None,
-            },
-        )
-        .collect::<Vec<_>>();
+    let id_slice = &args2[(argc + (l / 2))..];
+    let mut ids: Vec<(u64, u64)> = Vec::new();
+    for (i, id) in id_slice.iter().enumerate() {
+        if id.len() == 1 && id[0] == b'$' {
+            let store = stream_store.read().await;
+            let last = store
+                .streams
+                .get(keys[i])
+                .and_then(|s| s.last_key_value())
+                .map(|(&k, _)| k)
+                .unwrap_or((0, 1));
+            ids.push(last);
+            continue;
+        }
+        match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
+            Ok(((tid, _, sid), _)) => ids.push((tid, sid)),
+            _ => {
+                return Err(ParseError {
+                    message: "Unsupported XREAD command shape, bad id".to_string(),
+                });
+            }
+        }
+    }
 
     assert!(keys.len() == ids.len());
 
@@ -1191,17 +1206,6 @@ async fn process_xread(
                         return Ok(data);
                     }
                 }
-                // let mut store = stream_store.write().await;
-                // for (j, &k) in keys.iter().enumerate() {
-                //     if let Some(s) = store.streams.get(k) {
-                //         if let Some(data) = s.range(Included(ids[j]), Unbounded) {
-                //             return Ok(Resp::Array(vec![
-                //                 Resp::BulkString(k.to_vec()),
-                //                 Resp::BulkString(head),
-                //             ]));
-                //         }
-                //     }
-                // }
             } // lock dropped
 
             // 4. Wait for any notifier with deadline
