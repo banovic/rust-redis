@@ -1250,10 +1250,13 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
                 (*v).value = rsp_num.to_string().as_bytes().to_vec();
             }
         })
-        .or_insert(StoreValue {
-            t: Instant::now(),
-            ttl: None,
-            value: [b'1'].to_vec(),
+        .or_insert_with(|| {
+            rsp_num = 1;
+            StoreValue {
+                t: Instant::now(),
+                ttl: None,
+                value: rsp_num.to_string().as_bytes().to_vec(),
+            }
         });
     Ok(Resp::Integer(rsp_num))
 }
