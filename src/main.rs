@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use core::str;
+use core::{num, str};
 use futures::future::select_all;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::{
@@ -1221,6 +1221,41 @@ async fn process_xread(
     }
 }
 
+async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+    let args2 = args
+        .iter()
+        .flat_map(|r| match r {
+            Resp::BulkString(sv) => Some(sv),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if args2.len() != 1 {
+        return Err(ParseError {
+            message: "Unsupported INCR command shape".to_string(),
+        });
+    }
+    let var_name = args2[0];
+    let mut store = store.write().await;
+    store
+        .entry(var_name.to_vec())
+        .and_modify(|v| {
+            let number = match integer::<i64>().parse(&v.value) {
+                Ok((n, _)) => Some(n),
+                _ => None,
+            };
+            if let Some(n) = number {
+                (*v).t = Instant::now();
+                (*v).value = (n + 1).to_string().as_bytes().to_vec();
+            }
+        })
+        .or_insert(StoreValue {
+            t: Instant::now(),
+            ttl: None,
+            value: [b'1'].to_vec(),
+        });
+    panic!()
+}
+
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -1249,6 +1284,8 @@ async fn process_command(
                         b"XADD" => process_xadd(args, stream_store).await,
                         b"XRANGE" => process_xrange(args, stream_store).await,
                         b"XREAD" => process_xread(args, stream_store).await,
+                        // Transactions
+                        b"INCR" => process_incr(args, store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
