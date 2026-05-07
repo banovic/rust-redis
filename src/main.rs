@@ -1236,6 +1236,7 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
     }
     let var_name = args2[0];
     let mut store = store.write().await;
+    let mut rsp_num = 0_i64;
     store
         .entry(var_name.to_vec())
         .and_modify(|v| {
@@ -1244,6 +1245,7 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
                 _ => None,
             };
             if let Some(n) = number {
+                rsp_num = n;
                 (*v).t = Instant::now();
                 (*v).value = (n + 1).to_string().as_bytes().to_vec();
             }
@@ -1253,7 +1255,7 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
             ttl: None,
             value: [b'1'].to_vec(),
         });
-    panic!()
+    Ok(Resp::Integer(rsp_num))
 }
 
 async fn process_command(
