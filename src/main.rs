@@ -1245,9 +1245,9 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
                 _ => None,
             };
             if let Some(n) = number {
-                rsp_num = n;
+                rsp_num = n + 1;
                 (*v).t = Instant::now();
-                (*v).value = (n + 1).to_string().as_bytes().to_vec();
+                (*v).value = rsp_num.to_string().as_bytes().to_vec();
             }
         })
         .or_insert(StoreValue {
