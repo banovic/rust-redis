@@ -1236,28 +1236,36 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
     }
     let var_name = args2[0];
     let mut store = store.write().await;
-    let mut rsp_num = 0_i64;
-    store
-        .entry(var_name.to_vec())
-        .and_modify(|v| {
-            let number = match integer::<i64>().parse(&v.value) {
-                Ok((n, _)) => Some(n),
-                _ => None,
-            };
-            if let Some(n) = number {
-                rsp_num = n + 1;
-                (*v).t = Instant::now();
-                (*v).value = rsp_num.to_string().as_bytes().to_vec();
+    let (new_value, rsp_num) = if let Some(value) = store.get(var_name) {
+        let number = match integer::<i64>().parse(&value.value) {
+            Ok((n, _)) => Ok(n),
+            _ => {
+                return Ok(Resp::SimpleError(
+                    b"ERR value is not an integer or out of range".to_vec(),
+                ));
             }
-        })
-        .or_insert_with(|| {
-            rsp_num = 1;
+        }?;
+        (
+            StoreValue {
+                t: Instant::now(),
+                ttl: value.ttl,
+                value: (number + 1).to_string().as_bytes().to_vec(),
+            },
+            number + 1,
+        )
+    } else {
+        (
             StoreValue {
                 t: Instant::now(),
                 ttl: None,
-                value: rsp_num.to_string().as_bytes().to_vec(),
-            }
-        });
+                value: 1.to_string().as_bytes().to_vec(),
+            },
+            1,
+        )
+    };
+
+    store.insert(var_name.to_vec(), new_value);
+
     Ok(Resp::Integer(rsp_num))
 }
 
