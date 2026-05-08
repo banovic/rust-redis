@@ -1274,7 +1274,7 @@ async fn process_multi(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp
 }
 
 async fn process_exec(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
-    Ok(Resp::SimpleString(b"ERR EXEC without MULTI".to_vec()))
+    Ok(Resp::SimpleError(b"ERR EXEC without MULTI".to_vec()))
 }
 
 async fn process_command(
