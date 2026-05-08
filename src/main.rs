@@ -1273,6 +1273,10 @@ async fn process_multi(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp
     Ok(Resp::SimpleString(b"OK".to_vec()))
 }
 
+async fn process_exec(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+    Ok(Resp::SimpleString(b"ERR EXEC without MULTI".to_vec()))
+}
+
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -1304,6 +1308,7 @@ async fn process_command(
                         // Transactions
                         b"INCR" => process_incr(args, store).await,
                         b"MULTI" => process_multi(args, store).await,
+                        b"EXEC" => process_exec(args, store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
