@@ -1269,6 +1269,10 @@ async fn process_incr(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp,
     Ok(Resp::Integer(rsp_num))
 }
 
+async fn process_multi(args: &[Resp], store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+    Ok(Resp::SimpleString(b"OK".to_vec()))
+}
+
 async fn process_command(
     input: Resp,
     store: &Arc<RwLock<Store>>,
@@ -1299,6 +1303,7 @@ async fn process_command(
                         b"XREAD" => process_xread(args, stream_store).await,
                         // Transactions
                         b"INCR" => process_incr(args, store).await,
+                        b"MULTI" => process_multi(args, store).await,
                         _ => Err(ParseError {
                             message: format!(
                                 "Unsupported command: {:?} with shape: {:?}",
