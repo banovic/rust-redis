@@ -541,8 +541,10 @@ fn process_ping(cmd: &Command) -> Result<Resp, ParseError> {
 }
 
 async fn process_set(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+    println!("SET: {:?}", cmd);
     match cmd.args.len() {
         2 => {
+            println!("SET 2: {:?}", cmd);
             let key = &cmd.args[0];
             let value = &cmd.args[1];
             let mut store = store.write().await;
