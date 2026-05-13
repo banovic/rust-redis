@@ -1223,12 +1223,8 @@ async fn process_incr(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp,
     Ok(Resp::Integer(rsp_num))
 }
 
-async fn process_multi(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
+async fn process_watch(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
     Ok(Resp::SimpleString(b"OK".to_vec()))
-}
-
-async fn process_exec(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
-    Ok(Resp::SimpleError(b"ERR EXEC without MULTI".to_vec()))
 }
 
 async fn process_command(
@@ -1256,6 +1252,8 @@ async fn process_command(
         CommandName::XREAD => process_xread(&command, stream_store).await,
         // Transactions are handled per connection
         CommandName::INCR => process_incr(&command, store).await,
+        // Optimistic locking
+        CommandName::WATCH => process_watch(&command, store).await,
         _ => Err(ParseError {
             message: format!("Unsupported command: {:?}", command),
         }),
@@ -1340,6 +1338,8 @@ enum CommandName {
     MULTI,
     EXEC,
     DISCARD,
+    // Optimistic locking
+    WATCH,
 }
 
 fn get_command_name(c: &[u8]) -> Option<CommandName> {
@@ -1365,6 +1365,8 @@ fn get_command_name(c: &[u8]) -> Option<CommandName> {
         b"MULTI" => Some(CommandName::MULTI),
         b"EXEC" => Some(CommandName::EXEC),
         b"DISCARD" => Some(CommandName::DISCARD),
+        // Optimistic locking
+        b"WATCH" => Some(CommandName::WATCH),
         _ => None,
     }
 }
@@ -1502,32 +1504,6 @@ async fn main() {
                         Err(error) => println!("Processing error: {:?}", error),
                     }
                 }
-
-                // match parse_input_resp(&buffer) {
-                //     Ok((command, _)) => {
-                //         let command2 = get_command_name(&command);
-
-                //         match command2 {
-                //             Some(CommandName::MULTI) => {}
-                //             Some(CommandName::EXEC) => {}
-                //             Some(CommandName::DISCARD) => {}
-                //             _ => {
-                //                 match process_command(command, &store, &list_store, &stream_store)
-                //                     .await
-                //                 {
-                //                     Ok(resp) => {
-                //                         println!("Response: {:?}", resp);
-                //                         let mut out = Vec::new();
-                //                         encode_resp(&resp, &mut out);
-                //                         let _ = stream.write_all(&out[..]).await;
-                //                     }
-                //                     Err(error) => println!("Processing error: {:?}", error),
-                //                 }
-                //             }
-                //         }
-                //     }
-                //     Err(error) => println!("Parse error: {:?}", error),
-                // }
 
                 let _ = stream.flush().await;
                 buffer.fill(0u8);
