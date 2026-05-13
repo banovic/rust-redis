@@ -1495,6 +1495,7 @@ async fn main() {
                     let out = encode_resp(&Resp::SimpleString(b"QUEUED".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else {
+                    println!("CMD (non-TX): {:?}", &command);
                     match process_command(command, &store, &list_store, &stream_store).await {
                         Ok(resp) => {
                             println!("RESP (non-TX): {:?}", &resp);
