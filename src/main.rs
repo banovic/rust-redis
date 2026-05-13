@@ -1459,16 +1459,22 @@ async fn main() {
 
                 if command.name == CommandName::MULTI {
                     tx_queue = Some(Vec::new());
+                    let out = encode_resp(&Resp::SimpleString(b"OK".to_vec()));
+                    let _ = stream.write_all(&out[..]).await;
                 } else if command.name == CommandName::EXEC && tx_queue.is_some() {
                     let lock = store.write().await;
                     let mut results = Vec::new();
                     for cmd in tx_queue.take().unwrap() {
-                        let resp = process_command(cmd, &store, &list_store, &stream_store).await
+                        let resp = process_command(cmd, &store, &list_store, &stream_store)
+                            .await
                             .unwrap_or_else(|e| Resp::SimpleError(e.message.into_bytes()));
                         results.push(resp);
                     }
                     drop(lock);
                     let out = encode_resp(&Resp::Array(results));
+                    let _ = stream.write_all(&out[..]).await;
+                } else if command.name == CommandName::EXEC && tx_queue.is_none() {
+                    let out = encode_resp(&Resp::SimpleError(b"ERR EXEC without MULTI".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else if let Some(ref mut q) = tx_queue {
                     q.push(command);
