@@ -1478,6 +1478,8 @@ async fn main() {
                     let _ = stream.write_all(&out[..]).await;
                 } else if let Some(ref mut q) = tx_queue {
                     q.push(command);
+                    let out = encode_resp(&Resp::SimpleString(b"QUEUED".to_vec()));
+                    let _ = stream.write_all(&out[..]).await;
                 } else {
                     match process_command(command, &store, &list_store, &stream_store).await {
                         Ok(resp) => {
