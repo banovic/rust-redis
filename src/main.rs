@@ -1472,6 +1472,7 @@ async fn main() {
                         let resp = process_command(cmd, &store, &list_store, &stream_store)
                             .await
                             .unwrap_or_else(|e| Resp::SimpleError(e.message.into_bytes()));
+                        println!("RESP (TX): {:?}", &resp);
                         results.push(resp);
                     }
                     drop(lock);
@@ -1496,6 +1497,7 @@ async fn main() {
                 } else {
                     match process_command(command, &store, &list_store, &stream_store).await {
                         Ok(resp) => {
+                            println!("RESP (non-TX): {:?}", &resp);
                             let out = encode_resp(&resp);
                             let _ = stream.write_all(&out[..]).await;
                         }
