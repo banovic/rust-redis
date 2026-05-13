@@ -1464,6 +1464,7 @@ async fn main() {
                 } else if command.name == CommandName::EXEC && tx_queue.is_some() {
                     let lock = store.write().await;
                     let mut results = Vec::new();
+                    println!("EXEC start");
                     for cmd in tx_queue.take().unwrap() {
                         let resp = process_command(cmd, &store, &list_store, &stream_store)
                             .await
@@ -1472,6 +1473,7 @@ async fn main() {
                         results.push(resp);
                     }
                     drop(lock);
+                    //tx_queue = None;
                     let out = encode_resp(&Resp::Array(results));
                     let _ = stream.write_all(&out[..]).await;
                 } else if command.name == CommandName::EXEC && tx_queue.is_none() {
@@ -1481,7 +1483,6 @@ async fn main() {
                     q.push(command);
                     let out = encode_resp(&Resp::SimpleString(b"QUEUED".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
-                    println!("Q: {:?}", tx_queue);
                 } else {
                     match process_command(command, &store, &list_store, &stream_store).await {
                         Ok(resp) => {
