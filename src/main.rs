@@ -1464,7 +1464,7 @@ async fn main() {
                 } else if command.name == CommandName::EXEC && tx_queue.is_some() {
                     let lock = store.write().await;
                     let mut results = Vec::new();
-                    println!("EXEC start");
+                    println!("EXEC start, Q = {:?}", tx_queue);
                     for cmd in tx_queue.take().unwrap() {
                         let resp = process_command(cmd, &store, &list_store, &stream_store)
                             .await
