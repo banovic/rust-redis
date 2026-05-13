@@ -541,10 +541,8 @@ fn process_ping(cmd: &Command) -> Result<Resp, ParseError> {
 }
 
 async fn process_set(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
-    println!("SET: {:?}", cmd);
     match cmd.args.len() {
         2 => {
-            println!("SET 2: {:?}", cmd);
             let key = &cmd.args[0];
             let value = &cmd.args[1];
             let mut store = store.write().await;
@@ -1414,12 +1412,16 @@ async fn main() {
         streams: HashMap::new(),
         waiters: HashMap::new(),
     }));
+    // Tx lock
+    let tx_lock = Arc::new(RwLock::new(false));
 
     loop {
         let (mut stream, _) = listener.accept().await.unwrap();
         let store = Arc::clone(&store); //store.clone();
         let list_store = Arc::clone(&list_store);
         let stream_store = Arc::clone(&stream_store);
+        let tx_lock = Arc::clone(&tx_lock);
+
         tokio::spawn(async move {
             println!("accepted new connection");
             let mut tx_queue: Option<Vec<Command>> = None;
@@ -1464,7 +1466,7 @@ async fn main() {
                     let out = encode_resp(&Resp::SimpleString(b"OK".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else if command.name == CommandName::EXEC && tx_queue.is_some() {
-                    let lock = store.write().await;
+                    let lock = tx_lock.write().await;
                     let mut results = Vec::new();
                     for cmd in tx_queue.take().unwrap() {
                         println!("EXEC, CMD = {:?}", cmd);
