@@ -1472,7 +1472,6 @@ async fn main() {
                         let resp = process_command(cmd, &store, &list_store, &stream_store)
                             .await
                             .unwrap_or_else(|e| Resp::SimpleError(e.message.into_bytes()));
-                        println!("RESP (TX): {:?}", &resp);
                         results.push(resp);
                     }
                     drop(lock);
@@ -1487,9 +1486,7 @@ async fn main() {
                         encode_resp(&Resp::SimpleError(b"ERR DISCARD without MULTI".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else if command.name == CommandName::DISCARD && tx_queue.is_some() {
-                    println!("DISCARD non-empty pre: {:?}", &tx_queue);
                     tx_queue.take();
-                    println!("DISCARD non-empty post: {:?}", &tx_queue);
                     let out = encode_resp(&Resp::SimpleString(b"OK".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else if let Some(ref mut q) = tx_queue {
@@ -1497,10 +1494,8 @@ async fn main() {
                     let out = encode_resp(&Resp::SimpleString(b"QUEUED".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else {
-                    println!("CMD (non-TX): {:?}", &command);
                     match process_command(command, &store, &list_store, &stream_store).await {
                         Ok(resp) => {
-                            println!("RESP (non-TX): {:?}", &resp);
                             let out = encode_resp(&resp);
                             let _ = stream.write_all(&out[..]).await;
                         }
