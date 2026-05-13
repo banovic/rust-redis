@@ -1487,7 +1487,9 @@ async fn main() {
                         encode_resp(&Resp::SimpleError(b"ERR DISCARD without MULTI".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else if command.name == CommandName::DISCARD && tx_queue.is_some() {
-                    tx_queue = Some(Vec::new());
+                    println!("DISCARD non-empty pre: {:?}", &tx_queue);
+                    tx_queue.take();
+                    println!("DISCARD non-empty post: {:?}", &tx_queue);
                     let out = encode_resp(&Resp::SimpleString(b"OK".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
                 } else if let Some(ref mut q) = tx_queue {
