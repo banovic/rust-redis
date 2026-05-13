@@ -1468,6 +1468,7 @@ async fn main() {
                         let resp = process_command(cmd, &store, &list_store, &stream_store)
                             .await
                             .unwrap_or_else(|e| Resp::SimpleError(e.message.into_bytes()));
+                        println!("RESP: {:?}", &resp);
                         results.push(resp);
                     }
                     drop(lock);
