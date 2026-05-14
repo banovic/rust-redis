@@ -1491,6 +1491,11 @@ async fn main() {
                     tx_queue.take();
                     let out = encode_resp(&Resp::SimpleString(b"OK".to_vec()));
                     let _ = stream.write_all(&out[..]).await;
+                } else if command.name == CommandName::WATCH && tx_queue.is_some() {
+                    let out = encode_resp(&Resp::SimpleError(
+                        b"ERR WATCH inside MULTI is not allowed".to_vec(),
+                    ));
+                    let _ = stream.write_all(&out[..]).await;
                 } else if let Some(ref mut q) = tx_queue {
                     q.push(command);
                     let out = encode_resp(&Resp::SimpleString(b"QUEUED".to_vec()));
