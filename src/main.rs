@@ -794,6 +794,62 @@ impl Store {
                 //             l
                 //         });
             }
+            Command::Lpop { key, count } => {
+                if let Some(Value {
+                    t,
+                    ttl,
+                    value: PrimitiveValue::List(list),
+                }) = self.data.get_mut(&key)
+                {
+                    if list.is_empty() {
+                        return TryExecuteResult::Done(Reply::Null);
+                    }
+
+                    match count {
+                        None => {
+                            let e = list.pop_front().unwrap();
+                            TryExecuteResult::Done(Reply::BulkString(e))
+                        }
+                        Some(c) => {
+                            let mut els = Vec::new();
+                            for _ in 0..c {
+                                match list.pop_front() {
+                                    Some(e) => els.push(Reply::BulkString(e)),
+                                    None => return TryExecuteResult::Done(Reply::Array(els)),
+                                }
+                            }
+                            TryExecuteResult::Done(Reply::Array(els))
+                        }
+                    }
+                } else {
+                    TryExecuteResult::Done(Reply::Null)
+                }
+                //     let mut store = list_store.write().await;
+                //     let list = store.lists.get_mut(name);
+                //     if list.is_none() {
+                //         return Ok(Resp::Null);
+                //     }
+                //     let list = list.unwrap();
+                //     if list.is_empty() {
+                //         return Ok(Resp::Null);
+                //     }
+                //     match count {
+                //         None => {
+                //             let el = list.pop_front().unwrap();
+                //             Ok(Resp::BulkString(el))
+                //         }
+                //         Some(count) => {
+                //             let mut result = Vec::new();
+                //             for _ in 0..count {
+                //                 match list.pop_front() {
+                //                     Some(el) => result.push(Resp::BulkString(el)),
+                //                     None => return Ok(Resp::Array(result)),
+                //                 }
+                //             }
+                //             Ok(Resp::Array(result))
+                //         }
+                //     }
+            }
             Command::Blpop { keys, timeout } => {
                 let (reply, is_empty) = self.fetch_blpop(&keys);
 
