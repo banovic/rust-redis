@@ -668,9 +668,9 @@ impl Store {
             Command::Info { section } => {
                 // Info
                 let replica = if self.is_replica {
-                    "master".to_string()
-                } else {
                     "slave".to_string()
+                } else {
+                    "master".to_string()
                 };
                 let mut info = "# Replication".to_string();
                 info.push_str(&format!("role:{}", replica).to_string());
