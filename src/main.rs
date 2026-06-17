@@ -580,6 +580,86 @@ impl Store {
                 //     return (Resp::Array(data), is_empty);
                 // }
             }
+            Command::Xrange { key, start, end } => {
+                if let Some(Value {
+                    t: _,
+                    ttl: _,
+                    value: PrimitiveValue::Stream(stream),
+                }) = self.data.get(&key)
+                {
+                    let mut data: Vec<Reply> = Vec::new();
+                    for (&k, v) in stream.range((Included(&start), Included(&end))) {
+                        let mut row: Vec<Reply> = Vec::new();
+                        row.push(Reply::BulkString(
+                            format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
+                        ));
+                        row.push(Reply::Array(
+                            v.iter()
+                                .map(|s| Reply::BulkString(s.to_vec()))
+                                .collect::<Vec<_>>(),
+                        ));
+                        data.push(Reply::Array(row));
+                    }
+                    TryExecuteResult::Done(Reply::Array(data))
+                } else {
+                    TryExecuteResult::Done(Reply::SimpleError(
+                        format!("Stream not found, XRANGE: {:?}", key)
+                            .as_bytes()
+                            .to_vec(),
+                    ))
+                }
+                //     let mut data: Vec<Resp> = Vec::new();
+                //     for (&k, v) in stream.range((Included(&start), Included(&end))) {
+                //         let mut row: Vec<Resp> = Vec::new();
+                //         row.push(Resp::BulkString(
+                //             format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
+                //         ));
+                //         row.push(Resp::Array(
+                //             v.iter()
+                //                 .map(|s| Resp::BulkString(s.to_vec()))
+                //                 .collect::<Vec<_>>(),
+                //         ));
+                //         data.push(Resp::Array(row));
+                //     }
+                //     Ok(Resp::Array(data))
+
+                //     let (start_tid, start_sid) = if start.len() == 1 && start[0] == b'-' {
+                //         (0, 1)
+                //     } else {
+                //         let ((start_tid, _, start_sid), _) =
+                //             and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(start)?;
+                //         (start_tid, start_sid)
+                //     };
+                //     let (end_tid, end_sid) = if end.len() == 1 && end[0] == b'+' {
+                //         (u64::MAX, u64::MAX)
+                //     } else {
+                //         let ((end_tid, _, end_sid), _) =
+                //             and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(end)?;
+                //         (end_tid, end_sid)
+                //     };
+                //     let (key, start, end) = (key, (start_tid, start_sid), (end_tid, end_sid));
+                //     let stream_store = stream_store.read().await;
+                //     let stream = match stream_store.streams.get(key) {
+                //         Some(stream) => Ok(stream),
+                //         _ => Err(ParseError {
+                //             message: format!("Stream not found, XRANGE: {:?}", key),
+                //         }),
+                //     }?;
+                //     let mut data: Vec<Resp> = Vec::new();
+                //     for (&k, v) in stream.range((Included(&start), Included(&end))) {
+                //         let mut row: Vec<Resp> = Vec::new();
+                //         row.push(Resp::BulkString(
+                //             format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
+                //         ));
+                //         row.push(Resp::Array(
+                //             v.iter()
+                //                 .map(|s| Resp::BulkString(s.to_vec()))
+                //                 .collect::<Vec<_>>(),
+                //         ));
+                //         data.push(Resp::Array(row));
+                //     }
+                //     Ok(Resp::Array(data))
+            }
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
@@ -1871,13 +1951,10 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     }
                     TryExecuteResult::BlockingXread(waiter_id, keys_ids) => {
                         // Register interest in updates vs timeout conundrums
-                        println!("REGISTERING WAITER: {:?}, keys: {:?}", waiter_id, keys_ids);
                         store
                             .stream_xread_waiters
                             .insert(waiter_id, (reply_channel, keys_ids));
-                        println!("WHOLE WAITER STATE: {:?}", store.stream_xread_waiters);
                         let duration = Duration::from_millis(timeout.unwrap());
-                        println!("SLEEP Duration: {:?}", duration);
                         let tx2 = tx.clone();
                         tokio::spawn(async move {
                             sleep(duration).await;
@@ -1888,11 +1965,6 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             }
             Envelope::TimeoutXread { waiter_id } => {
                 // Deregister interest if there's any, and remove interestent
-                println!("DEREGISTERING WAITER: {:?}", waiter_id);
-                println!(
-                    "DEREGISTER WHOLE WAITER STATE: {:?}",
-                    store.stream_xread_waiters
-                );
                 if let Some((reply_channel, _)) = store.stream_xread_waiters.remove(&waiter_id) {
                     let _ = reply_channel.send(Reply::NullArray);
                 }
