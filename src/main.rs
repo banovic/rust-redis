@@ -248,6 +248,7 @@ impl Store {
                 self.data.insert(key, v);
                 TryExecuteResult::Done(Reply::Ok)
             }
+
             Command::Get { key } => match self.data.get(&key) {
                 Some(Value {
                     t,
@@ -263,6 +264,7 @@ impl Store {
                 Some(_) => TryExecuteResult::Done(Reply::Null), // TODO - error wrong type
                 None => TryExecuteResult::Done(Reply::Null),
             },
+
             Command::Watch { keys } => {
                 for key in keys {
                     self.watched_keys
@@ -274,6 +276,16 @@ impl Store {
                 }
                 TryExecuteResult::Done(Reply::Ok)
             }
+
+            Command::Unwatch => {
+                // Cleanup watched keys for this client, and return OK simple string
+                for (_, clients) in &mut self.watched_keys {
+                    clients.remove(&client_id);
+                }
+                self.watched_keys.retain(|_, clients| !clients.is_empty());
+                TryExecuteResult::Done(Reply::SimpleString("OK".as_bytes().to_vec()))
+            }
+
             Command::InternalExecuteTx { commands } => {
                 println!("tx: store1: {:?}", self);
                 // Optimistic locking check
@@ -898,6 +910,7 @@ enum Command {
     Watch {
         keys: Vec<Key>,
     },
+    Unwatch,
     InternalExecuteTx {
         commands: Vec<Command>,
     },
@@ -1076,6 +1089,7 @@ impl Command {
             b"WATCH" => Some(Command::Watch {
                 keys: bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>(),
             }),
+            b"UNWATCH" => Some(Command::Unwatch),
             _ => None,
         }
     }
