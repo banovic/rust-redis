@@ -717,7 +717,7 @@ impl Store {
                         let n = elements.len();
                         elements.reverse();
                         self.data.insert(
-                            key,
+                            key.clone(),
                             Value {
                                 t: Instant::now(),
                                 ttl: None,
