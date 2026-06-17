@@ -681,23 +681,47 @@ impl Store {
                 // Notify interested waiters:
                 let mut waiters: Vec<WaiterId> = Vec::new();
                 println!(
-                    "[Rpush] INTERESTED WAITERS - WHOLE STATE: {:?}",
+                    "[Lpush] INTERESTED WAITERS - WHOLE STATE: {:?}",
                     self.stream_xread_waiters
                 );
-                println!("[Rpush] INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
+                println!("[Lpush] INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
                 for (waiter_id, (_, keys)) in &self.list_blpop_waiters {
                     if keys.contains(&key) {
                         waiters.push(*waiter_id);
                     }
                 }
-                println!("[Rpush] INTERESTED WAITERS: {:?}", waiters);
+                println!("[Lpush] INTERESTED WAITERS: {:?}", waiters);
                 for waiter_id in waiters {
-                    if let Some((reply_channel, keys)) = self.list_blpop_waiters.remove(&waiter_id)
-                    {
-                        let (rows, is_empty) = self.fetch_blpop(&keys);
+                    let (reply_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
+                    let (rows, is_empty) = self.fetch_blpop(&keys);
+                    if !is_empty {
                         let _ = reply_channel.send(rows);
+                        self.list_blpop_waiters.remove(&waiter_id);
+                    } else {
+                        self.list_blpop_waiters
+                            .insert(waiter_id, (reply_channel, keys));
                     }
                 }
+                // // Notify interested waiters:
+                // let mut waiters: Vec<WaiterId> = Vec::new();
+                // println!(
+                //     "[Rpush] INTERESTED WAITERS - WHOLE STATE: {:?}",
+                //     self.stream_xread_waiters
+                // );
+                // println!("[Rpush] INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
+                // for (waiter_id, (_, keys)) in &self.list_blpop_waiters {
+                //     if keys.contains(&key) {
+                //         waiters.push(*waiter_id);
+                //     }
+                // }
+                // println!("[Rpush] INTERESTED WAITERS: {:?}", waiters);
+                // for waiter_id in waiters {
+                //     if let Some((reply_channel, keys)) = self.list_blpop_waiters.remove(&waiter_id)
+                //     {
+                //         let (rows, is_empty) = self.fetch_blpop(&keys);
+                //         let _ = reply_channel.send(rows);
+                //     }
+                // }
 
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
@@ -742,10 +766,14 @@ impl Store {
                 }
                 println!("[Lpush] INTERESTED WAITERS: {:?}", waiters);
                 for waiter_id in waiters {
-                    if let Some((reply_channel, keys)) = self.list_blpop_waiters.remove(&waiter_id)
-                    {
-                        let (rows, is_empty) = self.fetch_blpop(&keys);
+                    let (reply_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
+                    let (rows, is_empty) = self.fetch_blpop(&keys);
+                    if !is_empty {
                         let _ = reply_channel.send(rows);
+                        self.list_blpop_waiters.remove(&waiter_id);
+                    } else {
+                        self.list_blpop_waiters
+                            .insert(waiter_id, (reply_channel, keys));
                     }
                 }
 
