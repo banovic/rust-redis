@@ -3,6 +3,7 @@ use core::{num, str};
 use futures::channel::oneshot;
 use futures::future::select_all;
 use std::collections::HashSet;
+use std::env;
 use std::io::Write;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::AtomicUsize;
@@ -1310,9 +1311,20 @@ async fn execute_command(
 async fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
+    let default_port = 6379;
+    let port = {
+        let args: Vec<String> = env::args().collect();
+        if args.len() >= 3 && args[1] == "--port" {
+            args[2].parse::<u16>().unwrap()
+        } else {
+            default_port
+        }
+    };
 
     // Uncomment the code below to pass the first stage
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
     let client_counter = AtomicUsize::new(1);
     // mpsc == Multiple Producer Single Consumer
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
