@@ -327,6 +327,11 @@ impl Store {
                 if let TryExecuteResult::Done(_) = result {
                     // Notify interested waiters:
                     let mut waiters: Vec<WaiterId> = Vec::new();
+                    println!(
+                        "INTERESTED WAITERS - WHOLE STATE: {:?}",
+                        self.stream_xread_waiters
+                    );
+                    println!("INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
                     for (waiter_id, (_, keys_ids)) in &self.stream_xread_waiters {
                         if keys_ids.contains_key(&key) {
                             waiters.push(*waiter_id);
