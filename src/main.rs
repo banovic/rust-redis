@@ -40,7 +40,7 @@ type Bytes = Vec<u8>;
 #[derive(Debug)]
 enum Reply {
     Ok,
-    Error(&'static str),
+    //Error(&'static str),
     Null,
     NullArray,
     SimpleString(Vec<u8>),
@@ -50,7 +50,7 @@ enum Reply {
     Array(Vec<Reply>),
 }
 
-type RedisList = VecDeque<Bytes>;
+//type RedisList = VecDeque<Bytes>;
 type RedisStream = BTreeMap<StreamKey, Vec<Bytes>>;
 
 #[derive(Debug)]
@@ -108,8 +108,8 @@ impl Store {
             let mut stream_rows: Vec<Reply> = Vec::new();
 
             if let Some(Value {
-                t,
-                ttl,
+                t: _,
+                ttl: _,
                 value: PrimitiveValue::Stream(stream),
             }) = self.data.get(&key)
             {
@@ -252,7 +252,7 @@ impl Store {
                 }
                 TryExecuteResult::Done(Reply::Ok)
             }
-            Command::Internal_Execute_Tx { commands } => {
+            Command::InternalExecuteTx { commands } => {
                 println!("tx: store1: {:?}", self);
                 // Optimistic locking check
                 let mut lock_failed = false;
@@ -293,7 +293,7 @@ impl Store {
                 println!("tx: store2: {:?}", self);
                 TryExecuteResult::Done(Reply::Array(replies))
             }
-            Command::Internal_Discard_Tx => {
+            Command::InternalDiscardTx => {
                 // Cleanup watched keys for this client, and return null array
                 for (_, clients) in &mut self.watched_keys {
                     clients.remove(&client_id);
@@ -392,33 +392,8 @@ impl Store {
                         b"ERR No stream found for given key".to_vec(),
                     ))
                 }
-
-                // if let TryExecuteResult::Done(_) = result {
-                //     // Notify interested waiters:
-                //     let mut waiters: Vec<WaiterId> = Vec::new();
-                //     println!(
-                //         "INTERESTED WAITERS - WHOLE STATE: {:?}",
-                //         self.stream_xread_waiters
-                //     );
-                //     println!("INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
-                //     for (waiter_id, (_, keys, _)) in &self.stream_xread_waiters {
-                //         if keys.contains(&key) {
-                //             waiters.push(*waiter_id);
-                //         }
-                //     }
-                //     println!("INTERESTED WAITERS: {:?}", waiters);
-                //     for waiter_id in waiters {
-                //         if let Some((reply_channel, keys, ids)) =
-                //             self.stream_xread_waiters.remove(&waiter_id)
-                //         {
-                //             let (rows, is_empty) = self.fetch_xread(&keys, &ids);
-                //             let _ = reply_channel.send(Reply::Array(rows));
-                //         }
-                //     }
-                // }
-
-                //result
             }
+
             Command::Xread {
                 keys,
                 milliseconds,
@@ -457,6 +432,7 @@ impl Store {
                 self.waiter_id += 1;
                 TryExecuteResult::BlockingXread(self.waiter_id, keys, real_ids)
             }
+
             Command::Xrange { key, start, end } => {
                 if let Some(Value {
                     t: _,
@@ -486,6 +462,7 @@ impl Store {
                     ))
                 }
             }
+
             Command::Type { key } => match self.data.get(&key) {
                 Some(Value {
                     t: _,
@@ -504,6 +481,7 @@ impl Store {
                 }) => TryExecuteResult::Done(Reply::SimpleString("stream".as_bytes().to_vec())),
                 _ => TryExecuteResult::Done(Reply::SimpleString("none".as_bytes().to_vec())),
             },
+
             Command::Rpush { key, elements } => {
                 let n = match self.data.get_mut(&key) {
                     Some(Value {
@@ -534,6 +512,7 @@ impl Store {
 
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
+
             Command::Lpush { key, mut elements } => {
                 let n = match self.data.get_mut(&key) {
                     Some(Value {
@@ -632,6 +611,7 @@ impl Store {
                     TryExecuteResult::Done(Reply::Array(vec![]))
                 }
             }
+
             Command::Llen { key } => {
                 let n = if let Some(Value {
                     t: _,
@@ -645,6 +625,7 @@ impl Store {
                 };
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
+
             Command::Blpop { keys, timeout: _ } => {
                 let (reply, is_empty) = self.fetch_blpop(&keys);
 
@@ -768,740 +749,6 @@ fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Byte
     }
 }
 
-// /**
-//  * Process command
-//  */
-// fn process_echo(cmd: &Command) -> Result<Resp, ParseError> {
-//     if cmd.args.len() == 1 {
-//         Ok(Resp::BulkString(cmd.args[0].to_vec()))
-//     } else {
-//         Err(ParseError {
-//             message: format!("Unsupported ECHO command shape: {:?}", cmd.args),
-//         })
-//     }
-// }
-
-// fn process_ping(cmd: &Command) -> Result<Resp, ParseError> {
-//     match cmd.args.len() {
-//         1 => Ok(Resp::BulkString(cmd.args[0].to_vec())),
-//         0 => Ok(Resp::SimpleString(b"PONG".to_vec())),
-//         _ => Err(ParseError {
-//             message: format!("Unsupported PING command shape: {:?}", cmd.args),
-//         }),
-//     }
-// }
-
-// async fn process_set(
-//     client_id: usize,
-//     cmd: &Command,
-//     in_tx: bool,
-//     store: &Arc<RwLock<Store>>,
-//     watches: &Arc<RwLock<Watches>>,
-// ) -> Result<Resp, ParseError> {
-//     match cmd.args.len() {
-//         2 => {
-//             let key = &cmd.args[0];
-//             let value = &cmd.args[1];
-//             let mut store = store.write().await;
-//             let value = StoreValue {
-//                 t: Instant::now(),
-//                 ttl: None,
-//                 value: value.to_vec(),
-//             };
-//             (*store).insert(key.to_vec(), value);
-//             Ok(Resp::SimpleString(b"OK".to_vec()))
-//         }
-//         4 => {
-//             let key = &cmd.args[0];
-//             let value = &cmd.args[1];
-//             let expx = &cmd.args[2];
-//             let ttl = &cmd.args[3];
-//             let n = match integer::<u64>().parse(ttl) {
-//                 Ok((value, _)) => value,
-//                 Err(ParseError { message }) => {
-//                     return Err(ParseError {
-//                         message: format!("Invalid time value for SET command: {:?}", message),
-//                     });
-//                 }
-//             };
-//             let ttl = match &expx[..] {
-//                 b"EX" => Duration::from_secs(n),
-//                 b"PX" => Duration::from_millis(n),
-//                 _ => {
-//                     return Err(ParseError {
-//                         message: format!(
-//                             "Invalid time spec for SET (should be PX or EX): {:?}",
-//                             expx
-//                         ),
-//                     });
-//                 }
-//             };
-//             let mut store = store.write().await;
-//             let value = StoreValue {
-//                 t: Instant::now(),
-//                 ttl: Some(ttl),
-//                 value: value.to_vec(),
-//             };
-//             (*store).insert(key.to_vec(), value);
-//             Ok(Resp::SimpleString(b"OK".to_vec()))
-//         }
-//         _ => Err(ParseError {
-//             message: format!("Unsupported SET command shape: {:?}", cmd.args),
-//         }),
-//     }
-// }
-
-// async fn process_get(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 1 {
-//         return Err(ParseError {
-//             message: format!("Unsupported GET command shape: {:?}", cmd.args),
-//         });
-//     }
-//     let key = &cmd.args[0];
-//     let store = store.read().await;
-//     match store.get(key) {
-//         Some(StoreValue { t, ttl, value }) => match ttl {
-//             None => Ok(Resp::BulkString(value.to_vec())),
-//             Some(duration) if *t + *duration < Instant::now() => Ok(Resp::Null),
-//             Some(_) => Ok(Resp::BulkString(value.to_vec())),
-//         },
-//         None => Ok(Resp::Null),
-//     }
-// }
-
-// Lists
-// async fn process_list_rpush(
-//     cmd: &Command,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.is_empty() {
-//         return Err(ParseError {
-//             message: format!(
-//                 "Unsupported RPUSH command shape, missing list name: {:?}",
-//                 cmd.args
-//             ),
-//         });
-//     }
-//     let name = &cmd.args[0];
-
-//     let mut elements = VecDeque::new();
-//     for element in cmd.args.iter().skip(1) {
-//         elements.push_back(element.to_vec());
-//     }
-
-//     let mut store = list_store.write().await;
-
-//     store
-//         .lists
-//         .entry(name.to_vec())
-//         .and_modify(|e| e.append(&mut elements))
-//         .or_insert(elements);
-
-//     let notifier = waiter_for(&mut store, name);
-//     notifier.notify_waiters();
-
-//     Ok(Resp::Integer(
-//         store.lists.get(name).map_or(0, |l| l.len() as i64),
-//     ))
-// }
-
-// async fn process_list_lpush(
-//     cmd: &Command,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.is_empty() {
-//         return Err(ParseError {
-//             message: format!(
-//                 "Unsupported LPUSH command shape, missing list name: {:?}",
-//                 cmd.args
-//             ),
-//         });
-//     }
-//     let name = &cmd.args[0];
-
-//     let mut store = list_store.write().await;
-//     store
-//         .lists
-//         .entry(name.to_vec())
-//         .and_modify(|e| {
-//             for element in cmd.args.iter().skip(1) {
-//                 e.push_front(element.to_vec());
-//             }
-//         })
-//         .or_insert_with(|| {
-//             let mut l = VecDeque::new();
-//             for element in cmd.args.iter().skip(1) {
-//                 l.push_front(element.to_vec());
-//             }
-//             l
-//         });
-
-//     let notifier = waiter_for(&mut store, name);
-//     notifier.notify_waiters();
-
-//     Ok(Resp::Integer(
-//         store.lists.get(name).map_or(0, |l| l.len() as i64),
-//     ))
-// }
-
-// async fn process_list_llen(
-//     cmd: &Command,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 1 {
-//         return Err(ParseError {
-//             message: format!(
-//                 "Unsupported LLEN command shape, missing list name: {:?}",
-//                 cmd.args
-//             ),
-//         });
-//     }
-//     let name = &cmd.args[0];
-//     let store = list_store.read().await;
-//     let l = match store.lists.get(name) {
-//         Some(l) => l.len(),
-//         _ => 0,
-//     };
-//     Ok(Resp::Integer(l as i64))
-// }
-
-// async fn process_list_lpop(
-//     cmd: &Command,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-// ) -> Result<Resp, ParseError> {
-//     let (name, count) = match cmd.args.len() {
-//         1 => Ok((&cmd.args[0], None)),
-//         2 => match integer::<u32>().parse(&cmd.args[1])? {
-//             (c, _) => Ok((&cmd.args[0], Some(c))),
-//         },
-//         _ => Err(ParseError {
-//             message: format!(
-//                 "Unsupported LPOP command shape, missing list name: {:?}",
-//                 cmd.args
-//             ),
-//         }),
-//     }?;
-
-//     let mut store = list_store.write().await;
-//     let list = store.lists.get_mut(name);
-//     if list.is_none() {
-//         return Ok(Resp::Null);
-//     }
-//     let list = list.unwrap();
-//     if list.is_empty() {
-//         return Ok(Resp::Null);
-//     }
-//     match count {
-//         None => {
-//             let el = list.pop_front().unwrap();
-//             Ok(Resp::BulkString(el))
-//         }
-//         Some(count) => {
-//             let mut result = Vec::new();
-//             for _ in 0..count {
-//                 match list.pop_front() {
-//                     Some(el) => result.push(Resp::BulkString(el)),
-//                     None => return Ok(Resp::Array(result)),
-//                 }
-//             }
-//             Ok(Resp::Array(result))
-//         }
-//     }
-// }
-
-// async fn process_list_lrange(
-//     cmd: &Command,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 3 {
-//         return Err(ParseError {
-//             message: format!("Unsupported LRANGE command shape: {:?}", cmd.args),
-//         });
-//     }
-//     let name = &cmd.args[0];
-//     let (start, _) = integer::<i32>().parse(&cmd.args[1])?;
-//     let (stop, _) = integer::<i32>().parse(&cmd.args[2])?;
-//     let (name, start, stop) = (name, start, stop);
-//     println!("start: {}, stop: {}", start, stop);
-
-//     let mut result = Vec::new();
-//     let store = list_store.read().await;
-//     let list_option = store.lists.get(name);
-//     if list_option.is_none() {
-//         return Ok(Resp::Array(result));
-//     }
-//     let list = list_option.unwrap();
-
-//     let a = if start < 0 {
-//         start + list.len() as i32
-//     } else {
-//         start
-//     };
-//     let a = 0.max(a);
-
-//     let b = if stop < 0 {
-//         stop + list.len() as i32
-//     } else {
-//         stop
-//     };
-//     let b = (list.len() as i32 - 1).min(b);
-
-//     if a > b {
-//         return Ok(Resp::Array(result));
-//     }
-
-//     for i in (a as usize)..=(b as usize) {
-//         result.push(Resp::BulkString(list[i].to_vec()));
-//     }
-//     Ok(Resp::Array(result))
-// }
-
-// async fn process_list_blpop(
-//     cmd: &Command,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() < 2 {
-//         return Err(ParseError {
-//             message: format!("Unsupported BLPOP command shape: {:?}", cmd.args),
-//         });
-//     }
-//     let t_bytes = cmd.args.back().unwrap();
-//     let (t, _) = float::<f64>().parse(t_bytes).map_err(|_| ParseError {
-//         message: format!("Timeout for BLPOP must be double (f64), got: {:?}", t_bytes),
-//     })?;
-//     let duration = if t == 0.0 {
-//         Duration::MAX
-//     } else {
-//         Duration::from_micros((t * 1_000_000.) as u64)
-//     };
-
-//     let lists = cmd
-//         .args
-//         .iter()
-//         .take(cmd.args.len() - 1)
-//         .map(|l| l.to_vec())
-//         .collect::<Vec<_>>();
-
-//     println!(
-//         "BLPOP: lists: {:?}, t: {:?}, duration: {:?}",
-//         lists, t, duration
-//     );
-
-//     loop {
-//         // 1, Get or create notifiers for all target keys, under lock
-//         let notifiers: Vec<Arc<Notify>> = {
-//             let mut store = list_store.write().await;
-//             lists.iter().map(|k| waiter_for(&mut store, k)).collect()
-//         }; // lock for store dropped
-
-//         // 2. Build& arm Notified futures before checking
-//         let mut futs: Vec<_> = notifiers.iter().map(|n| Box::pin(n.notified())).collect();
-//         for f in &mut futs {
-//             f.as_mut().enable();
-//         }
-
-//         // 3. Try to pop - under lock, bruefly
-//         {
-//             let mut store = list_store.write().await;
-//             for k in &lists {
-//                 if let Some(list) = store.lists.get_mut(k) {
-//                     if let Some(head) = list.pop_front() {
-//                         return Ok(Resp::Array(vec![
-//                             Resp::BulkString(k.to_vec()),
-//                             Resp::BulkString(head),
-//                         ]));
-//                     }
-//                 }
-//             }
-//         } // lock dropped
-
-//         // 4. Wait for any notifier with deadline
-//         let any = futures::future::select_all(futs);
-//         if t == 0.0 {
-//             any.await;
-//         } else {
-//             match timeout(duration, any).await {
-//                 Ok(_) => continue,
-//                 Err(_) => return Ok(Resp::NullArray),
-//             }
-//         }
-//     }
-// }
-
-// async fn process_type(
-//     cmd: &Command,
-//     store: &Arc<RwLock<Store>>,
-//     list_store: &Arc<RwLock<RedisListStore>>,
-//     stream_store: &Arc<RwLock<RedisStreamStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 1 {
-//         return Err(ParseError {
-//             message: format!("Unsupported TYPE command shape: {:?}", cmd.args),
-//         });
-//     }
-//     let key = &cmd.args[0];
-//     if store.read().await.contains_key(key) {
-//         return Ok(Resp::SimpleString(b"string".to_vec()));
-//     }
-//     if list_store.read().await.lists.contains_key(key) {
-//         return Ok(Resp::SimpleString(b"list".to_vec()));
-//     }
-//     if stream_store.read().await.streams.contains_key(key) {
-//         return Ok(Resp::SimpleString(b"stream".to_vec()));
-//     }
-//     Ok(Resp::SimpleString(b"none".to_vec()))
-// }
-
-// async fn process_xadd(
-//     cmd: &Command,
-//     stream_store: &Arc<RwLock<RedisStreamStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() < 4 {
-//         return Err(ParseError {
-//             message: "Unsupported XADD command shape".to_string(),
-//         });
-//     }
-//     let key = &cmd.args[0];
-//     let id = &cmd.args[1];
-//     let ski = match parse_input_stream_id(id) {
-//         Some(k) => Ok(k),
-//         _ => Err(ParseError {
-//             message: "Unsupported XADD <id> key shape".to_string(),
-//         }),
-//     }?;
-//     if (cmd.args.len() - 2) % 2 != 0 {
-//         return Err(ParseError {
-//             message: "Unsupported XADD command shape".to_string(),
-//         });
-//     }
-//     let values = cmd
-//         .args
-//         .iter()
-//         .skip(2)
-//         .map(|v| v.to_vec())
-//         .collect::<Vec<_>>();
-
-//     let mut store = stream_store.write().await;
-
-//     // Ensure that there is stream `key`:
-//     store.streams.entry(key.to_vec()).or_insert(BTreeMap::new());
-
-//     let (tid, sid) = match next_stream_id(ski, store.streams.get(key).unwrap()) {
-//         Some(id) => id,
-//         _ => {
-//             return Ok(Resp::SimpleError(
-//                 b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
-//             ));
-//         }
-//     };
-
-//     if (tid, sid) < (0, 1) {
-//         return Ok(Resp::SimpleError(
-//             b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
-//         ));
-//     }
-
-//     if store.streams.get(key).unwrap().contains_key(&(tid, sid)) {
-//         return Ok(Resp::SimpleError(
-//             b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
-//                 .to_vec(),
-//         ));
-//     }
-//     if let Some((latest, _)) = store.streams.get(key).unwrap().last_key_value() {
-//         if &(tid, sid) < latest {
-//             return Ok(Resp::SimpleError(
-//                 b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
-//                     .to_vec(),
-//             ));
-//         }
-//     }
-//     store.streams.entry(key.to_vec()).and_modify(|bt| {
-//         (*bt).insert((tid, sid), values);
-//     });
-
-//     let notifier = stream_waiter_for(&mut store, key);
-//     notifier.notify_waiters();
-
-//     Ok(Resp::BulkString(
-//         format!("{}-{}", tid, sid).as_bytes().to_vec(),
-//     ))
-// }
-
-// async fn process_xrange(
-//     cmd: &Command,
-//     stream_store: &Arc<RwLock<RedisStreamStore>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 3 {
-//         return Err(ParseError {
-//             message: "Unsupported XRANGE command shape".to_string(),
-//         });
-//     }
-//     let key = &cmd.args[0];
-//     let start = &cmd.args[1];
-//     let end = &cmd.args[2];
-//     let (start_tid, start_sid) = if start.len() == 1 && start[0] == b'-' {
-//         (0, 1)
-//     } else {
-//         let ((start_tid, _, start_sid), _) =
-//             and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(start)?;
-//         (start_tid, start_sid)
-//     };
-//     let (end_tid, end_sid) = if end.len() == 1 && end[0] == b'+' {
-//         (u64::MAX, u64::MAX)
-//     } else {
-//         let ((end_tid, _, end_sid), _) =
-//             and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(end)?;
-//         (end_tid, end_sid)
-//     };
-//     let (key, start, end) = (key, (start_tid, start_sid), (end_tid, end_sid));
-//     let stream_store = stream_store.read().await;
-//     let stream = match stream_store.streams.get(key) {
-//         Some(stream) => Ok(stream),
-//         _ => Err(ParseError {
-//             message: format!("Stream not found, XRANGE: {:?}", key),
-//         }),
-//     }?;
-//     let mut data: Vec<Resp> = Vec::new();
-//     for (&k, v) in stream.range((Included(&start), Included(&end))) {
-//         let mut row: Vec<Resp> = Vec::new();
-//         row.push(Resp::BulkString(
-//             format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
-//         ));
-//         row.push(Resp::Array(
-//             v.iter()
-//                 .map(|s| Resp::BulkString(s.to_vec()))
-//                 .collect::<Vec<_>>(),
-//         ));
-//         data.push(Resp::Array(row));
-//     }
-//     Ok(Resp::Array(data))
-// }
-
-// fn cmp_bytes_no_case(a: &Vec<u8>, b: &[u8]) -> bool {
-//     a.to_ascii_uppercase() != b.to_ascii_uppercase()
-// }
-
-// fn cmp_resp_bytes_no_case(a: &Resp, b: &[u8]) -> bool {
-//     match a {
-//         Resp::BulkString(sv) => sv.to_ascii_uppercase() != b.to_ascii_uppercase(),
-//         _ => false,
-//     }
-// }
-
-// async fn process_xread_fetch_data(
-//     stream_store: &Arc<RwLock<RedisStreamStore>>,
-//     keys: &[&Vec<u8>],
-//     ids: &Vec<(u64, u64)>,
-// ) -> (Resp, bool) {
-//     let stream_store = stream_store.read().await;
-
-//     let mut data: Vec<Resp> = Vec::new();
-//     let mut is_empty = true;
-
-//     for (i, &key) in keys.iter().enumerate() {
-//         let mut stream_data: Vec<Resp> = Vec::new();
-
-//         let stream = match stream_store.streams.get(key) {
-//             Some(stream) => stream,
-//             _ => continue,
-//         };
-
-//         stream_data.push(Resp::BulkString(key.to_vec()));
-
-//         let mut stream_row_data: Vec<Resp> = Vec::new();
-
-//         for (&k, v) in stream.range((Excluded(&ids[i]), Unbounded)) {
-//             is_empty = false;
-//             let mut row: Vec<Resp> = Vec::new();
-//             row.push(Resp::BulkString(
-//                 format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
-//             ));
-//             row.push(Resp::Array(
-//                 v.iter()
-//                     .map(|s| Resp::BulkString(s.to_vec()))
-//                     .collect::<Vec<_>>(),
-//             ));
-
-//             stream_row_data.push(Resp::Array(row));
-//         }
-
-//         stream_data.push(Resp::Array(stream_row_data));
-
-//         data.push(Resp::Array(stream_data));
-//     }
-
-//     return (Resp::Array(data), is_empty);
-// }
-
-// async fn process_xread(
-//     cmd: &Command,
-//     stream_store: &Arc<RwLock<RedisStreamStore>>,
-// ) -> Result<Resp, ParseError> {
-//     let mut argc = 0_usize;
-//     let args2 = cmd.args.iter().collect::<Vec<_>>();
-//     // if args.len() < 3 {
-//     //     return Err(ParseError {
-//     //         message: "Unsupported XREAD command shape".to_string(),
-//     //     });
-//     // }
-//     // let block = cmp_resp_bytes_no_case(&args[0], b"BLOCK");
-//     let block = args2[argc].to_ascii_uppercase() == b"BLOCK";
-//     let duration = if block {
-//         argc += 1; // BLOCK
-//         let (ms, _) = integer::<u64>().parse(&args2[argc])?;
-//         argc += 1; // <millisecs>
-//         if ms == 0 {
-//             Duration::from_millis(u64::MAX)
-//         } else {
-//             Duration::from_millis(ms)
-//         }
-//     } else {
-//         Duration::from_hours(1)
-//     };
-
-//     if args2[argc].to_ascii_uppercase() != b"STREAMS" {
-//         return Err(ParseError {
-//             message: "Unsupported XREAD command shape".to_string(),
-//         });
-//     }
-//     argc += 1; // STREAMS
-
-//     // keys
-//     let l = args2[argc..].len();
-//     if l % 2 != 0 {
-//         return Err(ParseError {
-//             message: "Unsupported XREAD command shape".to_string(),
-//         });
-//     }
-//     let keys = &args2[argc..(argc + (l / 2))];
-//     // ids
-//     let id_slice = &args2[(argc + (l / 2))..];
-//     let mut ids: Vec<(u64, u64)> = Vec::new();
-//     for (i, id) in id_slice.iter().enumerate() {
-//         if id.len() == 1 && id[0] == b'$' {
-//             let store = stream_store.read().await;
-//             let last = store
-//                 .streams
-//                 .get(keys[i])
-//                 .and_then(|s| s.last_key_value())
-//                 .map(|(&k, _)| k)
-//                 .unwrap_or((0, 1));
-//             ids.push(last);
-//             continue;
-//         }
-//         match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
-//             Ok(((tid, _, sid), _)) => ids.push((tid, sid)),
-//             _ => {
-//                 return Err(ParseError {
-//                     message: "Unsupported XREAD command shape, bad id".to_string(),
-//                 });
-//             }
-//         }
-//     }
-
-//     assert!(keys.len() == ids.len());
-
-//     if block {
-//         loop {
-//             // 1, Get or create notifiers for all target keys, under lock
-//             let notifiers: Vec<Arc<Notify>> = {
-//                 let mut store = stream_store.write().await;
-//                 keys.iter()
-//                     .map(|k| stream_waiter_for(&mut store, k))
-//                     .collect()
-//             }; // lock for store dropped
-
-//             // 2. Build& arm Notified futures before checking
-//             let mut futs: Vec<_> = notifiers.iter().map(|n| Box::pin(n.notified())).collect();
-//             for f in &mut futs {
-//                 f.as_mut().enable();
-//             }
-
-//             // 3. Try to pop - under lock, bruefly
-//             {
-//                 if let (data, is_empty) = process_xread_fetch_data(stream_store, keys, &ids).await {
-//                     if !is_empty {
-//                         return Ok(data);
-//                     }
-//                 }
-//             } // lock dropped
-
-//             // 4. Wait for any notifier with deadline
-//             let any = futures::future::select_all(futs);
-//             match timeout(duration, any).await {
-//                 Ok(_) => continue,
-//                 Err(_) => return Ok(Resp::NullArray),
-//             }
-//         }
-//     } else {
-//         let (data, _) = process_xread_fetch_data(stream_store, keys, &ids).await;
-//         Ok(data)
-//     }
-// }
-
-// async fn process_incr(cmd: &Command, store: &Arc<RwLock<Store>>) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 1 {
-//         return Err(ParseError {
-//             message: "Unsupported INCR command shape".to_string(),
-//         });
-//     }
-//     let var_name = &cmd.args[0];
-//     let mut store = store.write().await;
-//     let (new_value, rsp_num) = if let Some(value) = store.get(var_name) {
-//         let number = match integer::<i64>().parse(&value.value) {
-//             Ok((n, _)) => Ok(n),
-//             _ => {
-//                 return Ok(Resp::SimpleError(
-//                     b"ERR value is not an integer or out of range".to_vec(),
-//                 ));
-//             }
-//         }?;
-//         (
-//             StoreValue {
-//                 t: Instant::now(),
-//                 ttl: value.ttl,
-//                 value: (number + 1).to_string().as_bytes().to_vec(),
-//             },
-//             number + 1,
-//         )
-//     } else {
-//         (
-//             StoreValue {
-//                 t: Instant::now(),
-//                 ttl: None,
-//                 value: 1.to_string().as_bytes().to_vec(),
-//             },
-//             1,
-//         )
-//     };
-
-//     store.insert(var_name.to_vec(), new_value);
-
-//     Ok(Resp::Integer(rsp_num))
-// }
-
-// async fn process_watch(
-//     client_id: usize,
-//     cmd: &Command,
-//     store: &Arc<RwLock<Store>>,
-//     watches: &Arc<RwLock<Watches>>,
-// ) -> Result<Resp, ParseError> {
-//     if cmd.args.len() != 1 {
-//         return Err(ParseError {
-//             message: "Unsupported WATCH command shape".to_string(),
-//         });
-//     }
-//     let var_name = &cmd.args[0];
-//     let mut watches = watches.write().await;
-//     watches
-//         .entry(var_name.clone())
-//         .and_modify(|s| {
-//             (*s).insert(client_id);
-//         })
-//         .or_insert(HashSet::from([client_id]));
-//     Ok(Resp::SimpleString(b"OK".to_vec()))
-// }
-
 fn write_usize(out: &mut Vec<u8>, n: usize) {
     let mut s = n.to_string().into_bytes();
     out.append(&mut s);
@@ -1518,11 +765,11 @@ fn encode_reply(r: &Reply) -> Vec<u8> {
         Reply::Ok => {
             write_bytes(&mut out, &[b'+', b'O', b'K', b'\r', b'\n']);
         }
-        Reply::Error(s) => {
-            write_bytes(&mut out, &[b'-']);
-            write_bytes(&mut out, &s.as_bytes().to_vec());
-            write_bytes(&mut out, &[b'\r', b'\n']);
-        }
+        // Reply::Error(s) => {
+        //     write_bytes(&mut out, &[b'-']);
+        //     write_bytes(&mut out, &s.as_bytes().to_vec());
+        //     write_bytes(&mut out, &[b'\r', b'\n']);
+        // }
         Reply::Null => {
             write_bytes(&mut out, &[b'$', b'-', b'1', b'\r', b'\n']);
         }
@@ -1567,7 +814,7 @@ fn encode_reply(r: &Reply) -> Vec<u8> {
 
 async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
     println!("write_reply received reply: {:?}", reply);
-    let mut out = encode_reply(reply);
+    let out = encode_reply(reply);
     let result = stream.write_all(&out[..]).await;
     result
 }
@@ -1640,10 +887,10 @@ enum Command {
     Watch {
         keys: Vec<Key>,
     },
-    Internal_Execute_Tx {
+    InternalExecuteTx {
         commands: Vec<Command>,
     },
-    Internal_Discard_Tx,
+    InternalDiscardTx,
 }
 
 impl Command {
@@ -1975,7 +1222,7 @@ async fn handle_client(
             }
             (Command::Exec, Some(_)) => {
                 let commands = queue.take().unwrap();
-                let tx = Command::Internal_Execute_Tx {
+                let tx = Command::InternalExecuteTx {
                     commands: commands.into(),
                 };
                 execute_command(&producer_ch, client_id, tx).await
@@ -1991,7 +1238,7 @@ async fn handle_client(
             }
             (Command::Discard, Some(_)) => {
                 queue = None;
-                execute_command(&producer_ch, client_id, Command::Internal_Discard_Tx).await
+                execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await
             }
 
             // Inside tx
@@ -2002,11 +1249,7 @@ async fn handle_client(
             (_, None) => execute_command(&producer_ch, client_id, command).await,
         };
 
-        //println!("Client {} received reply {:?}", client_id, &reply);
-
-        let r2 = write_reply(&mut stream, &result).await;
-        //println!("write to stream result: {:?}", &r2);
-
+        let _ = write_reply(&mut stream, &result).await;
         let _ = stream.flush().await;
         buffer.fill(0u8);
     }
@@ -2027,14 +1270,14 @@ async fn execute_command(
         reply_channel: reply_ch_sender,
     };
 
-    let r1 = store_ch.send(envelope).await; // this is store process
-    //println!("send to store result: {:?}", &r1);
+    let _ = store_ch.send(envelope).await; // this is store process
 
     // store process must send reply in all cases. how to ensure / enforce this?
     let reply = match reply_ch_receiver.await {
         Ok(r) => r,
         Err(_) => panic!("Something wrong with processing command"),
     };
+
     reply
 }
 
