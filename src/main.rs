@@ -1860,6 +1860,8 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     }
                     TryExecuteResult::BlockingXread(waiter_id, keys_ids) => {
                         // Register interest in updates vs timeout conundrums
+                        println!("REGISTERING WAITER: {:?}, keys: {:?}", waiter_id, keys_ids);
+                        println!("WHOLE WAITER STATE: {:?}", store.stream_xread_waiters);
                         store
                             .stream_xread_waiters
                             .insert(waiter_id, (reply_channel, keys_ids));
