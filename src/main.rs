@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+//use clap::Parser;
 use core::{num, str};
 use futures::channel::oneshot;
 use futures::future::select_all;
@@ -89,6 +90,7 @@ enum TryExecuteResult {
 }
 #[derive(Debug)]
 struct Store {
+    is_replica: bool,
     data: HashMap<Key, Value>,
     waiter_id: WaiterId,
     watched_keys: HashMap<Key, HashSet<usize>>,
@@ -97,8 +99,9 @@ struct Store {
 }
 
 impl Store {
-    fn new() -> Self {
+    fn new(is_replica: bool) -> Self {
         Self {
+            is_replica,
             data: HashMap::new(),
             waiter_id: 0,
             watched_keys: HashMap::new(),
@@ -343,7 +346,7 @@ impl Store {
                     value: PrimitiveValue::Str(s),
                 }) = self.data.get_mut(&key)
                 {
-                    let result = integer::<i64>().parse(s);
+                    let result = parser::Parser::parse(&integer::<i64>(), s);
                     match result {
                         Ok((n, _)) => {
                             *t = Instant::now();
@@ -686,7 +689,7 @@ fn parse_input_stream_id<'a>(id: &'a Vec<u8>) -> Option<XaddStreamIdInput> {
         Ok(((tid, _, sid), _)) => Some(XaddStreamIdInput::Explicit(tid, sid)),
         _ => match and!(integer::<u64>(), byte(b'-'), byte(b'*')).parse(id) {
             Ok(((tid, _, _), _)) => Some(XaddStreamIdInput::AutoGenSeq(tid)),
-            _ => match byte(b'*').parse(id) {
+            _ => match parser::Parser::parse(&byte(b'*'), id) {
                 Ok(_) => Some(XaddStreamIdInput::AugoGen),
                 _ => None,
             },
@@ -697,7 +700,7 @@ fn parse_input_stream_id<'a>(id: &'a Vec<u8>) -> Option<XaddStreamIdInput> {
 fn parse_xread_stream_id_input<'a>(id: &'a Vec<u8>) -> Option<XreadStreamIdInput> {
     match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
         Ok(((tid, _, sid), _)) => Some(XreadStreamIdInput::Explicit(tid, sid)),
-        _ => match byte(b'$').parse(id) {
+        _ => match parser::Parser::parse(&byte(b'$'), id) {
             Ok(_) => Some(XreadStreamIdInput::DollarId),
             _ => None,
         },
@@ -949,7 +952,7 @@ impl Command {
                     let value = bs.pop_front().unwrap();
                     let expx = bs.pop_front().unwrap();
                     let tmp = bs.pop_front().unwrap();
-                    let (ttl, _) = integer::<u64>().parse(&tmp[..]).unwrap();
+                    let (ttl, _) = parser::Parser::parse(&integer::<u64>(), &tmp[..]).unwrap();
                     let (ex, px) = match &expx[..] {
                         b"EX" => (Some(ttl), None),
                         b"PX" => (None, Some(ttl)),
@@ -973,8 +976,8 @@ impl Command {
             },
             b"LRANGE" => {
                 let key = Key(bs.pop_front().unwrap());
-                let (start, _) = integer::<i32>().parse(&bs[0][..]).unwrap();
-                let (end, _) = integer::<i32>().parse(&bs[1][..]).unwrap();
+                let (start, _) = parser::Parser::parse(&integer::<i32>(), &bs[0][..]).unwrap();
+                let (end, _) = parser::Parser::parse(&integer::<i32>(), &bs[1][..]).unwrap();
                 Some(Command::Lrange { key, start, end })
             }
             b"LPUSH" => match bs.len() {
@@ -991,7 +994,7 @@ impl Command {
             b"LPOP" => {
                 let key = Key(bs.pop_front().unwrap());
                 let count = if bs.len() > 0 {
-                    let (c, _) = integer::<u32>().parse(&bs[0][..]).unwrap();
+                    let (c, _) = parser::Parser::parse(&integer::<u32>(), &bs[0][..]).unwrap();
                     Some(c)
                 } else {
                     None
@@ -1000,7 +1003,7 @@ impl Command {
             }
             b"BLPOP" => {
                 let tmp = bs.pop_back().unwrap();
-                let (timeout, _) = float::<f64>().parse(&tmp[..]).unwrap();
+                let (timeout, _) = parser::Parser::parse(&float::<f64>(), &tmp[..]).unwrap();
                 let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
                 Some(Command::Blpop { keys, timeout })
             }
@@ -1046,7 +1049,7 @@ impl Command {
                 let milliseconds = if block {
                     bs.pop_front(); // BLOCK
                     let m = bs.pop_front().unwrap();
-                    let (ms, _) = integer::<u64>().parse(&m[..]).unwrap();
+                    let (ms, _) = parser::Parser::parse(&integer::<u64>(), &m[..]).unwrap();
                     Some(ms)
                 } else {
                     None
@@ -1315,32 +1318,45 @@ async fn execute_command(
     reply
 }
 
+/// Simple program to greet a person
+#[derive(clap::Parser, Debug)]
+struct Args {
+    /// Port on which to start
+    #[arg(long)]
+    port: Option<u16>,
+
+    /// Replica
+    #[arg(long)]
+    replicaof: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
     // Cli args
-    let args: Vec<String> = env::args().collect();
+    // let args: Vec<String> = env::args().collect();
 
-    // Port
+    // // Port
     let default_port = 6379;
-    let port = {
-        if args.len() >= 3 && args[1] == "--port" {
-            args[2].parse::<u16>().unwrap()
-        } else {
-            default_port
-        }
-    };
+    // let port = {
+    //     if args.len() >= 3 && args[1] == "--port" {
+    //         args[2].parse::<u16>().unwrap()
+    //     } else {
+    //         default_port
+    //     }
+    // };
+    let args = <Args as clap::Parser>::parse();
 
     // Uncomment the code below to pass the first stage
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port.unwrap_or(default_port)))
         .await
         .unwrap();
     let client_counter = AtomicUsize::new(1);
     // mpsc == Multiple Producer Single Consumer
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
-    let store = Store::new();
+    let store = Store::new(args.replicaof.is_some());
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     loop {
