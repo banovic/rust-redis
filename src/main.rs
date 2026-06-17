@@ -665,7 +665,13 @@ fn parse_input_stream_id<'a>(id: &'a Vec<u8>) -> Option<XaddStreamIdInput> {
 }
 
 fn parse_xread_stream_id_input<'a>(id: &'a Vec<u8>) -> Option<XreadStreamIdInput> {
-    panic!("TODO")
+    match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
+        Ok(((tid, _, sid), _)) => Some(XreadStreamIdInput::Explicit(tid, sid)),
+        _ => match byte(b'$').parse(id) {
+            Ok(_) => Some(XreadStreamIdInput::DollarId),
+            _ => None,
+        },
+    }
 }
 
 fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, u64)> {
