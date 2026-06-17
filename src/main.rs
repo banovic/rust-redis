@@ -1830,9 +1830,15 @@ impl Command {
             Command::Blpop { keys: _, timeout } => Some((timeout * 1_000.) as u64),
             Command::Xread {
                 keys: _,
-                milliseconds,
+                milliseconds: Some(ms),
                 ids: _,
-            } => milliseconds.clone(),
+            } => {
+                if *ms == 0 {
+                    Some(u64::MAX)
+                } else {
+                    Some(*ms)
+                }
+            }
             _ => None,
         }
     }
