@@ -33,6 +33,8 @@ use tokio::{
 mod parser;
 use parser::*;
 
+use crate::PrimitiveValue::List;
+
 type Bytes = Vec<u8>;
 
 #[derive(Debug)]
@@ -913,6 +915,24 @@ impl Store {
                 //         result.push(Resp::BulkString(list[i].to_vec()));
                 //     }
                 //     Ok(Resp::Array(result))
+            }
+            Command::Llen { key } => {
+                let n = if let Some(Value {
+                    t,
+                    ttl,
+                    value: PrimitiveValue::List(list),
+                }) = self.data.get(&key)
+                {
+                    list.len()
+                //     let l = match store.lists.get(name) {
+                //         Some(l) => l.len(),
+                //         _ => 0,
+                //     };
+                //     Ok(Resp::Integer(l as i64))
+                } else {
+                    0
+                };
+                TryExecuteResult::Done(Reply::Integer(n as i64))
             }
             Command::Blpop { keys, timeout } => {
                 let (reply, is_empty) = self.fetch_blpop(&keys);
