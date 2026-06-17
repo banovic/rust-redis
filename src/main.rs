@@ -75,7 +75,7 @@ type WaiterId = usize;
 
 enum TryExecuteResult {
     Done(Reply),
-    BlockingXread(WaiterId, HashMap<Key, (u64, u64)>),
+    BlockingXread(WaiterId, Vec<Key>, Vec<(u64, u64)>),
     BlockingBlpop(WaiterId, Vec<Key>),
 }
 #[derive(Debug)]
@@ -83,7 +83,7 @@ struct Store {
     data: HashMap<Key, Value>,
     waiter_id: WaiterId,
     watched_keys: HashMap<Key, HashSet<usize>>,
-    stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, HashMap<Key, (u64, u64)>)>,
+    stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>, Vec<(u64, u64)>)>,
     list_blpop_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>)>,
 }
 
@@ -98,11 +98,11 @@ impl Store {
         }
     }
 
-    fn fetch_xread(&self, keys_ids: &HashMap<Key, (u64, u64)>) -> (Vec<Reply>, bool) {
+    fn fetch_xread(&self, keys: &[Key], ids: &[(u64, u64)]) -> (Vec<Reply>, bool) {
         let mut rows: Vec<Reply> = Vec::new();
         let mut is_empty = true;
 
-        for (i, (key, id)) in keys_ids.iter().enumerate() {
+        for (i, key) in keys.iter().enumerate() {
             let mut stream_rows: Vec<Reply> = Vec::new();
 
             if let Some(Value {
@@ -115,7 +115,7 @@ impl Store {
 
                 let mut stream_row_data: Vec<Reply> = Vec::new();
 
-                for (&k, v) in stream.range((Excluded(id), Unbounded)) {
+                for (&k, v) in stream.range((Excluded(ids[i]), Unbounded)) {
                     is_empty = false;
                     let mut row: Vec<Reply> = Vec::new();
                     row.push(Reply::BulkString(
@@ -357,17 +357,17 @@ impl Store {
                         self.stream_xread_waiters
                     );
                     println!("INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
-                    for (waiter_id, (_, keys_ids)) in &self.stream_xread_waiters {
-                        if keys_ids.contains_key(&key) {
+                    for (waiter_id, (_, keys, ids)) in &self.stream_xread_waiters {
+                        if keys.contains(&key) {
                             waiters.push(*waiter_id);
                         }
                     }
                     println!("INTERESTED WAITERS: {:?}", waiters);
                     for waiter_id in waiters {
-                        if let Some((reply_channel, keys_ids)) =
+                        if let Some((reply_channel, keys, ids)) =
                             self.stream_xread_waiters.remove(&waiter_id)
                         {
-                            let (rows, is_empty) = self.fetch_xread(&keys_ids);
+                            let (rows, is_empty) = self.fetch_xread(&keys, &ids);
                             let _ = reply_channel.send(Reply::Array(rows));
                         }
                     }
@@ -405,8 +405,8 @@ impl Store {
                 // - schedule a timeout task to send null array to client
                 // - add channel to be notified (stream - key)
                 // these 2 tasks need some simple sync to write to oneshot channel
-                let keys_ids: HashMap<Key, (u64, u64)> = keys.into_iter().zip(real_ids).collect();
-                let (rows, is_empty) = self.fetch_xread(&keys_ids);
+                //let keys_ids: HashMap<Key, (u64, u64)> = keys.into_iter().zip(real_ids).collect();
+                let (rows, is_empty) = self.fetch_xread(&keys, &real_ids);
                 // let mut rows: Vec<Reply> = Vec::new();
                 // let mut is_empty = true;
 
@@ -453,7 +453,7 @@ impl Store {
                 }
 
                 self.waiter_id += 1;
-                TryExecuteResult::BlockingXread(self.waiter_id, keys_ids)
+                TryExecuteResult::BlockingXread(self.waiter_id, keys, real_ids)
                 // async fn process_xread(
                 //     cmd: &Command,
                 //     stream_store: &Arc<RwLock<RedisStreamStore>>,
@@ -2073,11 +2073,11 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     TryExecuteResult::Done(reply) => {
                         let _ = reply_channel.send(reply);
                     }
-                    TryExecuteResult::BlockingXread(waiter_id, keys_ids) => {
+                    TryExecuteResult::BlockingXread(waiter_id, keys, ids) => {
                         // Register interest in updates vs timeout conundrums
                         store
                             .stream_xread_waiters
-                            .insert(waiter_id, (reply_channel, keys_ids));
+                            .insert(waiter_id, (reply_channel, keys, ids));
                         let duration = Duration::from_millis(timeout.unwrap());
                         let tx2 = tx.clone();
                         tokio::spawn(async move {
@@ -2101,7 +2101,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             }
             Envelope::TimeoutXread { waiter_id } => {
                 // Deregister interest if there's any, and remove interestent
-                if let Some((reply_channel, _)) = store.stream_xread_waiters.remove(&waiter_id) {
+                if let Some((reply_channel, _, _)) = store.stream_xread_waiters.remove(&waiter_id) {
                     let _ = reply_channel.send(Reply::NullArray);
                 }
             }
