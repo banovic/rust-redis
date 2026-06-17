@@ -2307,6 +2307,8 @@ async fn handle_client(
             client_id, &command, &queue
         );
         let result = match (&command, &mut queue) {
+            // Just echo
+            (Command::Echo { message }, _) => Reply::BulkString(message.to_vec()),
             // Start tx
             (Command::Multi, None) => {
                 queue = Some(VecDeque::new());
