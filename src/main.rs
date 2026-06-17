@@ -636,16 +636,6 @@ impl Store {
 
             Command::Llen { key } => {
                 let n = self.map_list(&key, |list| list.len()).unwrap_or(0);
-                // let n = if let Some(Value {
-                //     t: _,
-                //     ttl: _,
-                //     value: PrimitiveValue::List(list),
-                // }) = self.data.get(&key)
-                // {
-                //     list.len()
-                // } else {
-                //     0
-                // };
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
 
@@ -826,7 +816,6 @@ fn encode_reply(r: &Reply) -> Vec<u8> {
             write_usize(&mut out, elements.len());
             write_bytes(&mut out, &[b'\r', b'\n']);
             for e in elements {
-                //encode_resp(e, out);
                 out.append(&mut encode_reply(e));
             }
         }
@@ -836,7 +825,6 @@ fn encode_reply(r: &Reply) -> Vec<u8> {
 }
 
 async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
-    println!("write_reply received reply: {:?}", reply);
     let out = encode_reply(reply);
     let result = stream.write_all(&out[..]).await;
     result
@@ -1227,10 +1215,10 @@ async fn handle_client(
 
         let command = Command::from_bytes(input).unwrap();
 
-        println!(
-            "Client {} received command {:?}, queue = {:?}",
-            client_id, &command, &queue
-        );
+        // println!(
+        //     "Client {} received command {:?}, queue = {:?}",
+        //     client_id, &command, &queue
+        // );
         let result = match (&command, &mut queue) {
             // Just echo
             (Command::Echo { message }, _) => Reply::BulkString(message.to_vec()),
