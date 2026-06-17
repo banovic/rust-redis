@@ -2108,7 +2108,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             Envelope::TimeoutBlpop { waiter_id } => {
                 // Deregister interest if there's any, and remove interestent
                 if let Some((reply_channel, _)) = store.list_blpop_waiters.remove(&waiter_id) {
-                    let _ = reply_channel.send(Reply::NullArray);
+                    let _ = reply_channel.send(Reply::Null);
                 }
             }
         }
