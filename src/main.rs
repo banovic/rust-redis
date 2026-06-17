@@ -916,6 +916,9 @@ enum Command {
         commands: Vec<Command>,
     },
     InternalDiscardTx,
+    Info {
+        section: Option<Bytes>,
+    },
 }
 
 impl Command {
@@ -1091,6 +1094,9 @@ impl Command {
                 keys: bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>(),
             }),
             b"UNWATCH" => Some(Command::Unwatch),
+            b"INFO" => Some(Command::Info {
+                section: bs.pop_front(),
+            }),
             _ => None,
         }
     }
@@ -1235,6 +1241,8 @@ async fn handle_client(
         //     client_id, &command, &queue
         // );
         let result = match (&command, &mut queue) {
+            // Info
+            (Command::Info { section }, _) => Reply::BulkString("role:master".as_bytes().to_vec()),
             // Just echo
             (Command::Echo { message }, _) => Reply::BulkString(message.to_vec()),
             (Command::Ping { message }, _) => match message {
@@ -1311,9 +1319,13 @@ async fn execute_command(
 async fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
+
+    // Cli args
+    let args: Vec<String> = env::args().collect();
+
+    // Port
     let default_port = 6379;
     let port = {
-        let args: Vec<String> = env::args().collect();
         if args.len() >= 3 && args[1] == "--port" {
             args[2].parse::<u16>().unwrap()
         } else {
