@@ -35,6 +35,12 @@ use parser::*;
 
 use crate::PrimitiveValue::List;
 
+// macro_rules! list_get {
+//     ($key: ident, $some_expr: expr, $none_expr: expr) => {
+
+//     };
+// }
+
 type Bytes = Vec<u8>;
 
 #[derive(Debug)]
@@ -97,6 +103,22 @@ impl Store {
             watched_keys: HashMap::new(),
             stream_xread_waiters: HashMap::new(),
             list_blpop_waiters: HashMap::new(),
+        }
+    }
+
+    fn map_list<F, R>(&self, key: &Key, f: F) -> Option<R>
+    where
+        F: Fn(&VecDeque<Bytes>) -> R,
+    {
+        if let Some(Value {
+            t: _,
+            ttl: _,
+            value: PrimitiveValue::List(list),
+        }) = self.data.get(key)
+        {
+            Some(f(list))
+        } else {
+            None
         }
     }
 
@@ -613,16 +635,17 @@ impl Store {
             }
 
             Command::Llen { key } => {
-                let n = if let Some(Value {
-                    t: _,
-                    ttl: _,
-                    value: PrimitiveValue::List(list),
-                }) = self.data.get(&key)
-                {
-                    list.len()
-                } else {
-                    0
-                };
+                let n = self.map_list(&key, |list| list.len()).unwrap_or(0);
+                // let n = if let Some(Value {
+                //     t: _,
+                //     ttl: _,
+                //     value: PrimitiveValue::List(list),
+                // }) = self.data.get(&key)
+                // {
+                //     list.len()
+                // } else {
+                //     0
+                // };
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
 
