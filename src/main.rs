@@ -660,6 +660,36 @@ impl Store {
                 //     }
                 //     Ok(Resp::Array(data))
             }
+            Command::Type { key } => {
+                match self.data.get(&key) {
+                    Some(Value {
+                        t: _,
+                        ttl: _,
+                        value: PrimitiveValue::List(_),
+                    }) => TryExecuteResult::Done(Reply::SimpleString("list".as_bytes().to_vec())),
+                    Some(Value {
+                        t: _,
+                        ttl: _,
+                        value: PrimitiveValue::Str(_),
+                    }) => TryExecuteResult::Done(Reply::SimpleString("string".as_bytes().to_vec())),
+                    Some(Value {
+                        t: _,
+                        ttl: _,
+                        value: PrimitiveValue::Stream(_),
+                    }) => TryExecuteResult::Done(Reply::SimpleString("stream".as_bytes().to_vec())),
+                    _ => TryExecuteResult::Done(Reply::SimpleString("none".as_bytes().to_vec())),
+                }
+                //     if store.read().await.contains_key(key) {
+                //         return Ok(Resp::SimpleString(b"string".to_vec()));
+                //     }
+                //     if list_store.read().await.lists.contains_key(key) {
+                //         return Ok(Resp::SimpleString(b"list".to_vec()));
+                //     }
+                //     if stream_store.read().await.streams.contains_key(key) {
+                //         return Ok(Resp::SimpleString(b"stream".to_vec()));
+                //     }
+                //     Ok(Resp::SimpleString(b"none".to_vec()))
+            }
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
