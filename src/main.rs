@@ -664,6 +664,19 @@ impl Store {
                 self.waiter_id += 1;
                 TryExecuteResult::BlockingBlpop(self.waiter_id, keys)
             }
+
+            Command::Info { section } => {
+                // Info
+                let replica = if self.is_replica {
+                    "master".to_string()
+                } else {
+                    "slave".to_string()
+                };
+                let mut info = "# Replication".to_string();
+                info.push_str(&format!("role:{}", replica).to_string());
+                TryExecuteResult::Done(Reply::BulkString(info.as_bytes().to_vec()))
+            }
+
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
@@ -1244,8 +1257,6 @@ async fn handle_client(
         //     client_id, &command, &queue
         // );
         let result = match (&command, &mut queue) {
-            // Info
-            (Command::Info { section }, _) => Reply::BulkString("role:master".as_bytes().to_vec()),
             // Just echo
             (Command::Echo { message }, _) => Reply::BulkString(message.to_vec()),
             (Command::Ping { message }, _) => match message {
