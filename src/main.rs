@@ -2086,6 +2086,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                         });
                     }
                     TryExecuteResult::BlockingBlpop(waiter_id, keys) => {
+                        println!("BLPOP: Timeout: {:?}", timeout);
                         store
                             .list_blpop_waiters
                             .insert(waiter_id, (reply_channel, keys));
