@@ -850,6 +850,70 @@ impl Store {
                 //         }
                 //     }
             }
+            Command::Lrange { key, start, end } => {
+                if let Some(Value {
+                    t,
+                    ttl,
+                    value: PrimitiveValue::List(list),
+                }) = self.data.get(&key)
+                {
+                    let a = if start < 0 {
+                        start + list.len() as i32
+                    } else {
+                        start
+                    };
+                    let a = 0.max(a);
+
+                    let b = if end < 0 {
+                        end + list.len() as i32
+                    } else {
+                        end
+                    };
+                    let b = (list.len() as i32 - 1).min(b);
+
+                    if a > b {
+                        return TryExecuteResult::Done(Reply::Array(vec![]));
+                    }
+
+                    let mut els = Vec::new();
+                    for i in (a as usize)..=(b as usize) {
+                        els.push(Reply::BulkString(list[i].to_vec()));
+                    }
+                    TryExecuteResult::Done(Reply::Array(els))
+                } else {
+                    TryExecuteResult::Done(Reply::Array(vec![]))
+                }
+                //let mut result = Vec::new();
+                //     let store = list_store.read().await;
+                //     let list_option = store.lists.get(name);
+                //     if list_option.is_none() {
+                //         return Ok(Resp::Array(result));
+                //     }
+                //     let list = list_option.unwrap();
+
+                //     let a = if start < 0 {
+                //         start + list.len() as i32
+                //     } else {
+                //         start
+                //     };
+                //     let a = 0.max(a);
+
+                //     let b = if stop < 0 {
+                //         stop + list.len() as i32
+                //     } else {
+                //         stop
+                //     };
+                //     let b = (list.len() as i32 - 1).min(b);
+
+                //     if a > b {
+                //         return Ok(Resp::Array(result));
+                //     }
+
+                //     for i in (a as usize)..=(b as usize) {
+                //         result.push(Resp::BulkString(list[i].to_vec()));
+                //     }
+                //     Ok(Resp::Array(result))
+            }
             Command::Blpop { keys, timeout } => {
                 let (reply, is_empty) = self.fetch_blpop(&keys);
 
