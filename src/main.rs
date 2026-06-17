@@ -327,12 +327,12 @@ impl Store {
                 if let TryExecuteResult::Done(_) = result {
                     // Notify interested waiters:
                     let mut waiters: Vec<WaiterId> = Vec::new();
-                    println!("INTERESTED WAITERS: {:?}", waiters);
                     for (waiter_id, (_, keys_ids)) in &self.stream_xread_waiters {
                         if keys_ids.contains_key(&key) {
                             waiters.push(*waiter_id);
                         }
                     }
+                    println!("INTERESTED WAITERS: {:?}", waiters);
                     for waiter_id in waiters {
                         if let Some((reply_channel, keys_ids)) =
                             self.stream_xread_waiters.remove(&waiter_id)
