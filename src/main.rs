@@ -141,11 +141,28 @@ impl Store {
         (rows, is_empty)
     }
 
+    fn notify_xread_waiters(&mut self, key: &Key) {
+        let mut waiters: Vec<WaiterId> = Vec::new();
+
+        for (waiter_id, (_, keys, _)) in &self.stream_xread_waiters {
+            if keys.contains(&key) {
+                waiters.push(*waiter_id);
+            }
+        }
+
+        for waiter_id in waiters {
+            if let Some((reply_channel, keys, ids)) = self.stream_xread_waiters.remove(&waiter_id) {
+                let (rows, _) = self.fetch_xread(&keys, &ids);
+                let _ = reply_channel.send(Reply::Array(rows));
+            }
+        }
+    }
+
     fn fetch_blpop(&mut self, keys: &[Key]) -> (Reply, bool) {
         for k in keys {
             if let Some(Value {
-                t,
-                ttl,
+                t: _,
+                ttl: _,
                 value: PrimitiveValue::List(list),
             }) = self.data.get_mut(k)
             {
@@ -161,6 +178,29 @@ impl Store {
             }
         }
         (Reply::NullArray, true)
+    }
+
+    fn notify_blpop_waiters(&mut self, key: &Key) {
+        // Notify interested waiters:
+        let mut waiters: Vec<WaiterId> = Vec::new();
+
+        for (waiter_id, (_, keys)) in &self.list_blpop_waiters {
+            if keys.contains(&key) {
+                waiters.push(*waiter_id);
+            }
+        }
+
+        for waiter_id in waiters {
+            let (reply_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
+            let (rows, is_empty) = self.fetch_blpop(&keys);
+            if !is_empty {
+                let _ = reply_channel.send(rows);
+                self.list_blpop_waiters.remove(&waiter_id);
+            } else {
+                self.list_blpop_waiters
+                    .insert(waiter_id, (reply_channel, keys));
+            }
+        }
     }
 
     // Pure, sync
@@ -303,9 +343,9 @@ impl Store {
                     value: PrimitiveValue::Stream(BTreeMap::new()),
                 });
 
-                let result = if let Some(Value {
-                    t,
-                    ttl,
+                if let Some(Value {
+                    t: _,
+                    ttl: _,
                     value: PrimitiveValue::Stream(stream),
                 }) = self.data.get_mut(&key)
                 {
@@ -342,6 +382,8 @@ impl Store {
 
                     stream.insert((tid, sid), field_values);
 
+                    self.notify_xread_waiters(&key);
+
                     TryExecuteResult::Done(Reply::BulkString(
                         format!("{}-{}", tid, sid).as_bytes().to_vec(),
                     ))
@@ -349,33 +391,33 @@ impl Store {
                     TryExecuteResult::Done(Reply::SimpleError(
                         b"ERR No stream found for given key".to_vec(),
                     ))
-                };
-
-                if let TryExecuteResult::Done(_) = result {
-                    // Notify interested waiters:
-                    let mut waiters: Vec<WaiterId> = Vec::new();
-                    println!(
-                        "INTERESTED WAITERS - WHOLE STATE: {:?}",
-                        self.stream_xread_waiters
-                    );
-                    println!("INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
-                    for (waiter_id, (_, keys, ids)) in &self.stream_xread_waiters {
-                        if keys.contains(&key) {
-                            waiters.push(*waiter_id);
-                        }
-                    }
-                    println!("INTERESTED WAITERS: {:?}", waiters);
-                    for waiter_id in waiters {
-                        if let Some((reply_channel, keys, ids)) =
-                            self.stream_xread_waiters.remove(&waiter_id)
-                        {
-                            let (rows, is_empty) = self.fetch_xread(&keys, &ids);
-                            let _ = reply_channel.send(Reply::Array(rows));
-                        }
-                    }
                 }
 
-                result
+                // if let TryExecuteResult::Done(_) = result {
+                //     // Notify interested waiters:
+                //     let mut waiters: Vec<WaiterId> = Vec::new();
+                //     println!(
+                //         "INTERESTED WAITERS - WHOLE STATE: {:?}",
+                //         self.stream_xread_waiters
+                //     );
+                //     println!("INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
+                //     for (waiter_id, (_, keys, _)) in &self.stream_xread_waiters {
+                //         if keys.contains(&key) {
+                //             waiters.push(*waiter_id);
+                //         }
+                //     }
+                //     println!("INTERESTED WAITERS: {:?}", waiters);
+                //     for waiter_id in waiters {
+                //         if let Some((reply_channel, keys, ids)) =
+                //             self.stream_xread_waiters.remove(&waiter_id)
+                //         {
+                //             let (rows, is_empty) = self.fetch_xread(&keys, &ids);
+                //             let _ = reply_channel.send(Reply::Array(rows));
+                //         }
+                //     }
+                // }
+
+                //result
             }
             Command::Xread {
                 keys,
@@ -402,49 +444,7 @@ impl Store {
                     }
                 }
 
-                // First, try to read if something is in there - if so fine, done - regardless of timeout.
-                // If there is timeout and there is nothing to read, do the following:
-                // - schedule a timeout task to send null array to client
-                // - add channel to be notified (stream - key)
-                // these 2 tasks need some simple sync to write to oneshot channel
-                //let keys_ids: HashMap<Key, (u64, u64)> = keys.into_iter().zip(real_ids).collect();
                 let (rows, is_empty) = self.fetch_xread(&keys, &real_ids);
-                // let mut rows: Vec<Reply> = Vec::new();
-                // let mut is_empty = true;
-
-                // for (i, key) in keys.iter().enumerate() {
-                //     let mut stream_rows: Vec<Reply> = Vec::new();
-
-                //     if let Some(Value {
-                //         t,
-                //         ttl,
-                //         value: PrimitiveValue::Stream(stream),
-                //     }) = self.data.get(&key)
-                //     {
-                //         stream_rows.push(Reply::BulkString(key.0.clone()));
-
-                //         let mut stream_row_data: Vec<Reply> = Vec::new();
-
-                //         for (&k, v) in stream.range((Excluded(&real_ids[i]), Unbounded)) {
-                //             is_empty = false;
-                //             let mut row: Vec<Reply> = Vec::new();
-                //             row.push(Reply::BulkString(
-                //                 format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
-                //             ));
-                //             row.push(Reply::Array(
-                //                 v.iter()
-                //                     .map(|s| Reply::BulkString(s.to_vec()))
-                //                     .collect::<Vec<_>>(),
-                //             ));
-
-                //             stream_row_data.push(Reply::Array(row));
-                //         }
-
-                //         stream_rows.push(Reply::Array(stream_row_data));
-
-                //         rows.push(Reply::Array(stream_rows));
-                //     }
-                // }
 
                 if !is_empty {
                     return TryExecuteResult::Done(Reply::Array(rows));
@@ -456,156 +456,6 @@ impl Store {
 
                 self.waiter_id += 1;
                 TryExecuteResult::BlockingXread(self.waiter_id, keys, real_ids)
-                // async fn process_xread(
-                //     cmd: &Command,
-                //     stream_store: &Arc<RwLock<RedisStreamStore>>,
-                // ) -> Result<Resp, ParseError> {
-                //     let mut argc = 0_usize;
-                //     let args2 = cmd.args.iter().collect::<Vec<_>>();
-                //     // if args.len() < 3 {
-                //     //     return Err(ParseError {
-                //     //         message: "Unsupported XREAD command shape".to_string(),
-                //     //     });
-                //     // }
-                //     // let block = cmp_resp_bytes_no_case(&args[0], b"BLOCK");
-                //     let block = args2[argc].to_ascii_uppercase() == b"BLOCK";
-                //     let duration = if block {
-                //         argc += 1; // BLOCK
-                //         let (ms, _) = integer::<u64>().parse(&args2[argc])?;
-                //         argc += 1; // <millisecs>
-                //         if ms == 0 {
-                //             Duration::from_millis(u64::MAX)
-                //         } else {
-                //             Duration::from_millis(ms)
-                //         }
-                //     } else {
-                //         Duration::from_hours(1)
-                //     };
-
-                //     if args2[argc].to_ascii_uppercase() != b"STREAMS" {
-                //         return Err(ParseError {
-                //             message: "Unsupported XREAD command shape".to_string(),
-                //         });
-                //     }
-                //     argc += 1; // STREAMS
-
-                //     // keys
-                //     let l = args2[argc..].len();
-                //     if l % 2 != 0 {
-                //         return Err(ParseError {
-                //             message: "Unsupported XREAD command shape".to_string(),
-                //         });
-                //     }
-                //     let keys = &args2[argc..(argc + (l / 2))];
-                //     // ids
-                //     let id_slice = &args2[(argc + (l / 2))..];
-                //     let mut ids: Vec<(u64, u64)> = Vec::new();
-                //     for (i, id) in id_slice.iter().enumerate() {
-                //         if id.len() == 1 && id[0] == b'$' {
-                //             let store = stream_store.read().await;
-                //             let last = store
-                //                 .streams
-                //                 .get(keys[i])
-                //                 .and_then(|s| s.last_key_value())
-                //                 .map(|(&k, _)| k)
-                //                 .unwrap_or((0, 1));
-                //             ids.push(last);
-                //             continue;
-                //         }
-                //         match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(&id) {
-                //             Ok(((tid, _, sid), _)) => ids.push((tid, sid)),
-                //             _ => {
-                //                 return Err(ParseError {
-                //                     message: "Unsupported XREAD command shape, bad id".to_string(),
-                //                 });
-                //             }
-                //         }
-                //     }
-
-                //     assert!(keys.len() == ids.len());
-
-                //     if block {
-                //         loop {
-                //             // 1, Get or create notifiers for all target keys, under lock
-                //             let notifiers: Vec<Arc<Notify>> = {
-                //                 let mut store = stream_store.write().await;
-                //                 keys.iter()
-                //                     .map(|k| stream_waiter_for(&mut store, k))
-                //                     .collect()
-                //             }; // lock for store dropped
-
-                //             // 2. Build& arm Notified futures before checking
-                //             let mut futs: Vec<_> = notifiers.iter().map(|n| Box::pin(n.notified())).collect();
-                //             for f in &mut futs {
-                //                 f.as_mut().enable();
-                //             }
-
-                //             // 3. Try to pop - under lock, bruefly
-                //             {
-                //                 if let (data, is_empty) = process_xread_fetch_data(stream_store, keys, &ids).await {
-                //                     if !is_empty {
-                //                         return Ok(data);
-                //                     }
-                //                 }
-                //             } // lock dropped
-
-                //             // 4. Wait for any notifier with deadline
-                //             let any = futures::future::select_all(futs);
-                //             match timeout(duration, any).await {
-                //                 Ok(_) => continue,
-                //                 Err(_) => return Ok(Resp::NullArray),
-                //             }
-                //         }
-                //     } else {
-                //         let (data, _) = process_xread_fetch_data(stream_store, keys, &ids).await;
-                //         Ok(data)
-                //     }
-                // }
-
-                // async fn process_xread_fetch_data(
-                //     stream_store: &Arc<RwLock<RedisStreamStore>>,
-                //     keys: &[&Vec<u8>],
-                //     ids: &Vec<(u64, u64)>,
-                // ) -> (Resp, bool) {
-                //     let stream_store = stream_store.read().await;
-
-                //     let mut data: Vec<Resp> = Vec::new();
-                //     let mut is_empty = true;
-
-                //     for (i, &key) in keys.iter().enumerate() {
-                //         let mut stream_data: Vec<Resp> = Vec::new();
-
-                //         let stream = match stream_store.streams.get(key) {
-                //             Some(stream) => stream,
-                //             _ => continue,
-                //         };
-
-                //         stream_data.push(Resp::BulkString(key.to_vec()));
-
-                //         let mut stream_row_data: Vec<Resp> = Vec::new();
-
-                //         for (&k, v) in stream.range((Excluded(&ids[i]), Unbounded)) {
-                //             is_empty = false;
-                //             let mut row: Vec<Resp> = Vec::new();
-                //             row.push(Resp::BulkString(
-                //                 format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
-                //             ));
-                //             row.push(Resp::Array(
-                //                 v.iter()
-                //                     .map(|s| Resp::BulkString(s.to_vec()))
-                //                     .collect::<Vec<_>>(),
-                //             ));
-
-                //             stream_row_data.push(Resp::Array(row));
-                //         }
-
-                //         stream_data.push(Resp::Array(stream_row_data));
-
-                //         data.push(Resp::Array(stream_data));
-                //     }
-
-                //     return (Resp::Array(data), is_empty);
-                // }
             }
             Command::Xrange { key, start, end } => {
                 if let Some(Value {
@@ -680,50 +530,7 @@ impl Store {
                     }
                 };
 
-                // Notify interested waiters:
-                let mut waiters: Vec<WaiterId> = Vec::new();
-                println!(
-                    "[Lpush] INTERESTED WAITERS - WHOLE STATE: {:?}",
-                    self.stream_xread_waiters
-                );
-                println!("[Lpush] INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
-                for (waiter_id, (_, keys)) in &self.list_blpop_waiters {
-                    if keys.contains(&key) {
-                        waiters.push(*waiter_id);
-                    }
-                }
-                println!("[Lpush] INTERESTED WAITERS: {:?}", waiters);
-                for waiter_id in waiters {
-                    let (reply_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
-                    let (rows, is_empty) = self.fetch_blpop(&keys);
-                    if !is_empty {
-                        let _ = reply_channel.send(rows);
-                        self.list_blpop_waiters.remove(&waiter_id);
-                    } else {
-                        self.list_blpop_waiters
-                            .insert(waiter_id, (reply_channel, keys));
-                    }
-                }
-                // // Notify interested waiters:
-                // let mut waiters: Vec<WaiterId> = Vec::new();
-                // println!(
-                //     "[Rpush] INTERESTED WAITERS - WHOLE STATE: {:?}",
-                //     self.stream_xread_waiters
-                // );
-                // println!("[Rpush] INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
-                // for (waiter_id, (_, keys)) in &self.list_blpop_waiters {
-                //     if keys.contains(&key) {
-                //         waiters.push(*waiter_id);
-                //     }
-                // }
-                // println!("[Rpush] INTERESTED WAITERS: {:?}", waiters);
-                // for waiter_id in waiters {
-                //     if let Some((reply_channel, keys)) = self.list_blpop_waiters.remove(&waiter_id)
-                //     {
-                //         let (rows, is_empty) = self.fetch_blpop(&keys);
-                //         let _ = reply_channel.send(rows);
-                //     }
-                // }
+                self.notify_blpop_waiters(&key);
 
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
@@ -754,52 +561,15 @@ impl Store {
                     }
                 };
 
-                // Notify interested waiters:
-                let mut waiters: Vec<WaiterId> = Vec::new();
-                println!(
-                    "[Lpush] INTERESTED WAITERS - WHOLE STATE: {:?}",
-                    self.stream_xread_waiters
-                );
-                println!("[Lpush] INTERESTED WAITERS - SEARCHING KEY: {:?}", key);
-                for (waiter_id, (_, keys)) in &self.list_blpop_waiters {
-                    if keys.contains(&key) {
-                        waiters.push(*waiter_id);
-                    }
-                }
-                println!("[Lpush] INTERESTED WAITERS: {:?}", waiters);
-                for waiter_id in waiters {
-                    let (reply_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
-                    let (rows, is_empty) = self.fetch_blpop(&keys);
-                    if !is_empty {
-                        let _ = reply_channel.send(rows);
-                        self.list_blpop_waiters.remove(&waiter_id);
-                    } else {
-                        self.list_blpop_waiters
-                            .insert(waiter_id, (reply_channel, keys));
-                    }
-                }
+                self.notify_blpop_waiters(&key);
 
                 TryExecuteResult::Done(Reply::Integer(n as i64))
-                //     store
-                //         .lists
-                //         .entry(name.to_vec())
-                //         .and_modify(|e| {
-                //             for element in cmd.args.iter().skip(1) {
-                //                 e.push_front(element.to_vec());
-                //             }
-                //         })
-                //         .or_insert_with(|| {
-                //             let mut l = VecDeque::new();
-                //             for element in cmd.args.iter().skip(1) {
-                //                 l.push_front(element.to_vec());
-                //             }
-                //             l
-                //         });
             }
+
             Command::Lpop { key, count } => {
                 if let Some(Value {
-                    t,
-                    ttl,
+                    t: _,
+                    ttl: _,
                     value: PrimitiveValue::List(list),
                 }) = self.data.get_mut(&key)
                 {
@@ -826,36 +596,12 @@ impl Store {
                 } else {
                     TryExecuteResult::Done(Reply::Null)
                 }
-                //     let mut store = list_store.write().await;
-                //     let list = store.lists.get_mut(name);
-                //     if list.is_none() {
-                //         return Ok(Resp::Null);
-                //     }
-                //     let list = list.unwrap();
-                //     if list.is_empty() {
-                //         return Ok(Resp::Null);
-                //     }
-                //     match count {
-                //         None => {
-                //             let el = list.pop_front().unwrap();
-                //             Ok(Resp::BulkString(el))
-                //         }
-                //         Some(count) => {
-                //             let mut result = Vec::new();
-                //             for _ in 0..count {
-                //                 match list.pop_front() {
-                //                     Some(el) => result.push(Resp::BulkString(el)),
-                //                     None => return Ok(Resp::Array(result)),
-                //                 }
-                //             }
-                //             Ok(Resp::Array(result))
-                //         }
-                //     }
             }
+
             Command::Lrange { key, start, end } => {
                 if let Some(Value {
-                    t,
-                    ttl,
+                    t: _,
+                    ttl: _,
                     value: PrimitiveValue::List(list),
                 }) = self.data.get(&key)
                 {
@@ -885,56 +631,21 @@ impl Store {
                 } else {
                     TryExecuteResult::Done(Reply::Array(vec![]))
                 }
-                //let mut result = Vec::new();
-                //     let store = list_store.read().await;
-                //     let list_option = store.lists.get(name);
-                //     if list_option.is_none() {
-                //         return Ok(Resp::Array(result));
-                //     }
-                //     let list = list_option.unwrap();
-
-                //     let a = if start < 0 {
-                //         start + list.len() as i32
-                //     } else {
-                //         start
-                //     };
-                //     let a = 0.max(a);
-
-                //     let b = if stop < 0 {
-                //         stop + list.len() as i32
-                //     } else {
-                //         stop
-                //     };
-                //     let b = (list.len() as i32 - 1).min(b);
-
-                //     if a > b {
-                //         return Ok(Resp::Array(result));
-                //     }
-
-                //     for i in (a as usize)..=(b as usize) {
-                //         result.push(Resp::BulkString(list[i].to_vec()));
-                //     }
-                //     Ok(Resp::Array(result))
             }
             Command::Llen { key } => {
                 let n = if let Some(Value {
-                    t,
-                    ttl,
+                    t: _,
+                    ttl: _,
                     value: PrimitiveValue::List(list),
                 }) = self.data.get(&key)
                 {
                     list.len()
-                //     let l = match store.lists.get(name) {
-                //         Some(l) => l.len(),
-                //         _ => 0,
-                //     };
-                //     Ok(Resp::Integer(l as i64))
                 } else {
                     0
                 };
                 TryExecuteResult::Done(Reply::Integer(n as i64))
             }
-            Command::Blpop { keys, timeout } => {
+            Command::Blpop { keys, timeout: _ } => {
                 let (reply, is_empty) = self.fetch_blpop(&keys);
 
                 if !is_empty {
@@ -946,63 +657,7 @@ impl Store {
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
-
-    //     async fn handle(
-    //         &mut self,
-    //         client_id: usize,
-    //         cmd: Command,
-    //         r: oneshot::Sender<Reply>,
-    //         tx: mpsc::Sender<Command>,
-    //     ) {
-    //         let timeout = cmd.block_timeout();
-    //         match self.try_execute(client_id, cmd) {
-    //             TryExecuteResult::Done(result) => {
-    //                 let _ = r.send(result);
-    //             }
-    //             TryExecuteResult::BlockingXread(waiter_id, keys) => {
-    //                 self.stream_xread_waiters.insert(waiter_id, (r, keys));
-    //                 let duration = Duration::from_millis(timeout.unwrap());
-    //                 let tx2 = tx.clone();
-    //                 tokio::spawn(async move {
-    //                     sleep(duration).await;
-    // //                    let _ = tx2.send(Envelope {}Command::Internal_Timeout { waiter_id }).await;
-    // let _ = tx2.send(Envelope {client_id, Command::Internal_Timeout { waiter_id }, r}).await;
-    //                 });
-    //             }
-    //         };
-    //     }
 }
-
-// struct ModifiedValues {
-//     // key name -> set of client ids that have modified value with that key
-//     keys: HashMap<Vec<u8>, HashSet<usize>>,
-// }
-
-// impl ModifiedValues {
-//     fn new() -> Self {
-//         ModifiedValues {
-//             keys: HashMap::new(),
-//         }
-//     }
-
-//     fn register(&mut self, key: &[u8], client_id: usize) {
-//         self.keys
-//             .entry(key.to_vec())
-//             .and_modify(|s| {
-//                 (*s).insert(client_id);
-//             })
-//             .or_insert_with(|| HashSet::from([client_id]));
-//     }
-
-//     fn unregister(&mut self, key: &[u8], client_id: usize) {
-//         if let Some(s) = self.keys.get_mut(&key.to_vec()) {
-//             s.remove(&client_id);
-//             if s.is_empty() {
-//                 self.keys.remove(key);
-//             }
-//         }
-//     }
-// }
 
 // milliseconds-seqeunce id
 #[derive(Debug)]
