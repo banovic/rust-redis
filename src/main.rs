@@ -1472,6 +1472,7 @@ async fn run_master_connection(addr: String, port: u16) {
         let (input, _) = parse_input_resp(&buffer).unwrap();
 
         let command = Command::from_bytes(input).unwrap();
+        println!("[REPLICA] command: {:?}", command);
     }
 }
 
