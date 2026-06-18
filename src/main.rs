@@ -1422,10 +1422,12 @@ struct Args {
     replicaof: Option<String>,
 }
 
-async fn run_master(addr: String, port: u16) {
+// This is run when server is replica
+async fn run_master_connection(addr: String, port: u16) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut buffer = [0; 1024];
 
+    /// Handshake
     // PING - PONG
     let message = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
     let _ = stream.write_all(&encode_reply(&message)).await;
@@ -1457,6 +1459,20 @@ async fn run_master(addr: String, port: u16) {
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     let bytes_read = stream.read(&mut buffer).await.unwrap();
+
+    println!("Last handshake message(s) : {:?}", buffer);
+
+    /// Read commands for replication
+    while let Ok(n) = stream.read(&mut buffer).await {
+        if n == 0 {
+            break;
+        }
+
+        // Parse input resp into Vec<Bytes>
+        let (input, _) = parse_input_resp(&buffer).unwrap();
+
+        let command = Command::from_bytes(input).unwrap();
+    }
 }
 
 #[tokio::main]
@@ -1471,7 +1487,7 @@ async fn main() {
     let mut is_replica = false;
     if let Some(addr) = master_addr {
         is_replica = true;
-        tokio::spawn(run_master(addr, port));
+        tokio::spawn(run_master_connection(addr, port));
     }
 
     // Uncomment the code below to pass the first stage
