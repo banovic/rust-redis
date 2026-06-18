@@ -949,6 +949,10 @@ enum Command {
     ReplconfCapa {
         capabilites: Vec<Bytes>,
     },
+    Psync {
+        replication_id: String,
+        offset: u64,
+    },
 }
 
 impl Command {
@@ -1141,6 +1145,15 @@ impl Command {
                     _ => panic!("Unknown REPLCONF shape"),
                 }
             }
+            b"PSYNC" => {
+                let replication_id = String::from_utf8(bs.pop_front().unwrap()).unwrap();
+                let offset_part = bs.pop_front().unwrap();
+                let (offset, _) = integer::<u64>().parse(&offset_part).unwrap();
+                Some(Command::Psync {
+                    replication_id,
+                    offset,
+                })
+            }
             _ => None,
         }
     }
@@ -1292,6 +1305,18 @@ async fn handle_client(
             (Command::ReplconfCapa { capabilites: _ }, _) => {
                 Reply::SimpleString("OK".as_bytes().to_vec())
             }
+            // Psync
+            (
+                Command::Psync {
+                    replication_id: _,
+                    offset: _,
+                },
+                _,
+            ) => Reply::SimpleString(
+                "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
+                    .as_bytes()
+                    .to_vec(),
+            ),
             // Just echo
             (Command::Echo { message }, _) => Reply::BulkString(message.to_vec()),
             (Command::Ping { message }, _) => match message {
