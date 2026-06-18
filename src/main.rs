@@ -1349,24 +1349,27 @@ struct Args {
     replicaof: Option<String>,
 }
 
+async fn run_master(addr: String) {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+
+    // 2. Write data to the server stream
+    let message = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
+    let _ = stream.write_all(&encode_reply(&message)).await;
+}
+
 #[tokio::main]
 async fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
-    // Cli args
-    // let args: Vec<String> = env::args().collect();
-
-    // // Port
     let default_port = 6379;
-    // let port = {
-    //     if args.len() >= 3 && args[1] == "--port" {
-    //         args[2].parse::<u16>().unwrap()
-    //     } else {
-    //         default_port
-    //     }
-    // };
     let args = <Args as clap::Parser>::parse();
+    let master_addr = args.replicaof.map(|v| v.replace(" ", ":"));
+    let mut is_replica = false;
+    if let Some(addr) = master_addr {
+        is_replica = true;
+        tokio::spawn(run_master(addr));
+    }
 
     // Uncomment the code below to pass the first stage
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port.unwrap_or(default_port)))
@@ -1375,7 +1378,7 @@ async fn main() {
     let client_counter = AtomicUsize::new(1);
     // mpsc == Multiple Producer Single Consumer
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
-    let store = Store::new(args.replicaof.is_some());
+    let store = Store::new(is_replica);
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     loop {
