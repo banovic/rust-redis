@@ -943,6 +943,12 @@ enum Command {
     Info {
         section: Option<Bytes>,
     },
+    ReplconfListeningPort {
+        port: u16,
+    },
+    ReplconfCapa {
+        capabilites: Vec<Bytes>,
+    },
 }
 
 impl Command {
@@ -1121,6 +1127,20 @@ impl Command {
             b"INFO" => Some(Command::Info {
                 section: bs.pop_front(),
             }),
+            b"REPLCONF" => {
+                let next_token = bs.pop_front().unwrap();
+                match &next_token[..] {
+                    b"listening-port" => {
+                        let port_part = bs.pop_front().unwrap();
+                        let (port, _) = integer::<u16>().parse(&port_part).unwrap();
+                        Some(Command::ReplconfListeningPort { port })
+                    }
+                    b"capa" => Some(Command::ReplconfCapa {
+                        capabilites: bs.into(),
+                    }),
+                    _ => panic!("Unknown REPLCONF shape"),
+                }
+            }
             _ => None,
         }
     }
@@ -1265,6 +1285,13 @@ async fn handle_client(
         //     client_id, &command, &queue
         // );
         let result = match (&command, &mut queue) {
+            // Replconf's
+            (Command::ReplconfListeningPort { port: _ }, _) => {
+                Reply::SimpleString("OK".as_bytes().to_vec())
+            }
+            (Command::ReplconfCapa { capabilites: _ }, _) => {
+                Reply::SimpleString("OK".as_bytes().to_vec())
+            }
             // Just echo
             (Command::Echo { message }, _) => Reply::BulkString(message.to_vec()),
             (Command::Ping { message }, _) => match message {
