@@ -1375,6 +1375,15 @@ async fn run_master(addr: String, port: u16) {
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     let bytes_read = stream.read(&mut buffer).await.unwrap();
+
+    // PSYNC
+    let message = Reply::Array(vec![
+        Reply::BulkString("PSYNC".as_bytes().to_vec()),
+        Reply::BulkString("?".as_bytes().to_vec()),
+        Reply::BulkString("-1".as_bytes().to_vec()),
+    ]);
+    let _ = stream.write_all(&encode_reply(&message)).await;
+    let bytes_read = stream.read(&mut buffer).await.unwrap();
 }
 
 #[tokio::main]
