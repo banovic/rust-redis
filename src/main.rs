@@ -673,15 +673,15 @@ impl Store {
                     "master".to_string()
                 };
                 let mut info = "# Replication".to_string();
-                info.push_str(&format!("role:{}", replica).to_string());
+                info.push_str(&format!("\nrole:{}", replica).to_string());
                 info.push_str(
                     &format!(
-                        "master_replid:{}",
+                        "\nmaster_replid:{}",
                         "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
                     )
                     .to_string(),
                 );
-                info.push_str(&format!("master_repl_offset:{}", 0).to_string());
+                info.push_str(&format!("\nmaster_repl_offset:{}", 0).to_string());
                 TryExecuteResult::Done(Reply::BulkString(info.as_bytes().to_vec()))
             }
 
