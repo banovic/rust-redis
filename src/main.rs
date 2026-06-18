@@ -951,7 +951,7 @@ enum Command {
     },
     Psync {
         replication_id: String,
-        offset: u64,
+        offset: i64,
     },
 }
 
@@ -1148,7 +1148,7 @@ impl Command {
             b"PSYNC" => {
                 let replication_id = String::from_utf8(bs.pop_front().unwrap()).unwrap();
                 let offset_part = bs.pop_front().unwrap();
-                let (offset, _) = integer::<u64>().parse(&offset_part).unwrap();
+                let (offset, _) = integer::<i64>().parse(&offset_part).unwrap();
                 Some(Command::Psync {
                     replication_id,
                     offset,
