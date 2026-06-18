@@ -1349,12 +1349,32 @@ struct Args {
     replicaof: Option<String>,
 }
 
-async fn run_master(addr: String) {
+async fn run_master(addr: String, port: u16) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut buffer = [0; 1024];
 
-    // 2. Write data to the server stream
+    // PING - PONG
     let message = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
     let _ = stream.write_all(&encode_reply(&message)).await;
+    let bytes_read = stream.read(&mut buffer).await.unwrap();
+
+    // REPLCONF
+    let message = Reply::Array(vec![
+        Reply::BulkString("REPLCONF".as_bytes().to_vec()),
+        Reply::BulkString("listening-port".as_bytes().to_vec()),
+        Reply::BulkString(format!("{}", port).as_bytes().to_vec()),
+    ]);
+    let _ = stream.write_all(&encode_reply(&message)).await;
+    let bytes_read = stream.read(&mut buffer).await.unwrap();
+
+    // REPLCONF
+    let message = Reply::Array(vec![
+        Reply::BulkString("REPLCONF".as_bytes().to_vec()),
+        Reply::BulkString("capa".as_bytes().to_vec()),
+        Reply::BulkString("psync2".as_bytes().to_vec()),
+    ]);
+    let _ = stream.write_all(&encode_reply(&message)).await;
+    let bytes_read = stream.read(&mut buffer).await.unwrap();
 }
 
 #[tokio::main]
@@ -1364,15 +1384,16 @@ async fn main() {
 
     let default_port = 6379;
     let args = <Args as clap::Parser>::parse();
+    let port = args.port.unwrap_or(default_port);
     let master_addr = args.replicaof.map(|v| v.replace(" ", ":"));
     let mut is_replica = false;
     if let Some(addr) = master_addr {
         is_replica = true;
-        tokio::spawn(run_master(addr));
+        tokio::spawn(run_master(addr, port));
     }
 
     // Uncomment the code below to pass the first stage
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port.unwrap_or(default_port)))
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
         .unwrap();
     let client_counter = AtomicUsize::new(1);
