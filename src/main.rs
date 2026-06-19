@@ -1232,6 +1232,60 @@ impl Command {
             _ => false,
         }
     }
+
+    fn encode_to_bytes(&self) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+
+        match self {
+            Command::Set { key, value, ex, px } => {
+                write_bytes(&mut out, &[b'*', b'3', b'\r', b'\n']);
+                write_bytes(&mut out, &"$3\r\nSET\r\n".as_bytes().to_vec());
+
+                // Key
+                write_bytes(
+                    &mut out,
+                    &format!("${}\r\n", key.0.len()).as_bytes().to_vec(),
+                );
+                write_bytes(&mut out, &key.0);
+                write_bytes(&mut out, &"\r\n".as_bytes().to_vec());
+
+                // Value
+                write_bytes(
+                    &mut out,
+                    &format!("${}\r\n", value.len()).as_bytes().to_vec(),
+                );
+                write_bytes(&mut out, &value);
+                write_bytes(&mut out, &"\r\n".as_bytes().to_vec());
+
+                // ex
+                if let Some(ex) = ex {
+                    write_bytes(&mut out, &"$2\r\nEX\r\n".as_bytes().to_vec());
+                    let ex_s = format!("{}", ex);
+                    write_bytes(
+                        &mut out,
+                        &format!("${}\r\n{}\r\n", ex_s.len(), ex_s)
+                            .as_bytes()
+                            .to_vec(),
+                    );
+                }
+
+                // px
+                if let Some(px) = px {
+                    write_bytes(&mut out, &"$2\r\nPX\r\n".as_bytes().to_vec());
+                    let px_s = format!("{}", px);
+                    write_bytes(
+                        &mut out,
+                        &format!("${}\r\n{}\r\n", px_s.len(), px_s)
+                            .as_bytes()
+                            .to_vec(),
+                    );
+                }
+
+                Some(out)
+            }
+            _ => None,
+        }
+    }
 }
 
 enum Envelope {
@@ -1435,10 +1489,17 @@ async fn handle_client(
                     }
                 }
             },
-            command = rx.recv() => {
+            replicate_command = rx.recv() => {
                 // Command received from master, encode it and send it to client / replica
                 // (this is all happening on master, this is process inside master / server)
-                println!("Replica received command: {:?}", command);
+                println!("Replica received command: {:?}", replicate_command);
+                if let Some(command) = replicate_command {
+                    if let Some(encoded_command) = command.encode_to_bytes() {
+                        println!("Sending ecnoded command: {:?}", encoded_command);
+                        let _ = stream.write_all(&encoded_command).await;
+                        let _ = stream.flush().await;
+                    }
+                }
             }
         }
     }
