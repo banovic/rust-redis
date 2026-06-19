@@ -888,6 +888,7 @@ fn encode_reply(r: &Reply) -> Vec<u8> {
 async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
     let out = encode_reply(reply);
     let result = stream.write_all(&out[..]).await;
+    let _ = stream.flush();
     result
 }
 
@@ -1439,14 +1440,15 @@ async fn handle_client(
                         break;
                     }
                     Ok(_) => {
+                        buffer.fill(0u8);
                         let (input, _) = parse_input_resp(&buffer).unwrap();
                         let command = Command::from_bytes(input).unwrap();
-                        let replies = match (&command, &mut queue) {
+                        match (&command, &mut queue) {
                             (Command::ReplconfListeningPort { port: _ }, _) => {
-                                vec![Reply::SimpleString("OK".as_bytes().to_vec())]
+                                write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec()));
                             }
                             (Command::ReplconfCapa { capabilites: _ }, _) => {
-                                vec![Reply::SimpleString("OK".as_bytes().to_vec())]
+                                write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec()));
                             }
                             // Psync
                             (
@@ -1458,61 +1460,60 @@ async fn handle_client(
                             ) => {
                                 let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
                                 // This client is replica
-                                vec![
-                                    Reply::SimpleString(
-                                        "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
-                                            .as_bytes()
-                                            .to_vec(),
-                                    ),
-                                    Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap()),
-                                ]
+                                write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec()));
+                                write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap()));
                             },
                             // Just echo
-                            (Command::Echo { message }, _) => vec![Reply::BulkString(message.to_vec())],
-                            (Command::Ping { message }, _) => match message {
-                                Some(m) => vec![Reply::BulkString(m.to_vec())],
-                                None => vec![Reply::SimpleString("PONG".as_bytes().to_vec())],
+                            (Command::Echo { message }, _) => {write_reply(&mut stream, &Reply::BulkString(message.to_vec()));},
+                            (Command::Ping { message }, _) => {
+                                match message {
+                                    Some(m) => {
+                                        write_reply(&mut stream, &Reply::BulkString(m.to_vec()));
+                                    },
+                                    None => {
+                                        write_reply(&mut stream, &Reply::SimpleString("PONG".as_bytes().to_vec()));
+                                    }
+                                };
                             },
                             // Start tx
                             (Command::Multi, None) => {
                                 queue = Some(VecDeque::new());
-                                vec![Reply::Ok]
+                                write_reply(&mut stream, &Reply::Ok);
                             }
                             (Command::Exec, Some(_)) => {
                                 let commands = queue.take().unwrap();
                                 let tx = Command::InternalExecuteTx {
                                     commands: commands.into(),
                                 };
-                                vec![execute_command(&producer_ch, client_id, tx).await]
+                                write_reply(&mut stream, &execute_command(&producer_ch, client_id, tx).await);
                             }
-                            (Command::Exec, None) => vec![Reply::SimpleError(
-                                "ERR EXEC without MULTI".as_bytes().to_vec(),
-                            )],
-                            (Command::Watch { keys: _ }, Some(_)) => vec![Reply::SimpleError(
-                                "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
-                            )],
-                            (Command::Discard, None) => vec![Reply::SimpleError(
-                                "ERR DISCARD without MULTI".as_bytes().to_vec(),
-                            )],
+                            (Command::Exec, None) => {
+                                write_reply(&mut stream, &Reply::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec()));
+                            },
+                            (Command::Watch { keys: _ }, Some(_)) => {
+                                write_reply(&mut stream, &Reply::SimpleError(
+                                    "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
+                                ));
+                            }
+                            (Command::Discard, None) => {
+                                write_reply(&mut stream, &Reply::SimpleError(
+                                    "ERR DISCARD without MULTI".as_bytes().to_vec(),
+                                ));
+                            }
                             (Command::Discard, Some(_)) => {
                                 queue = None;
-                                vec![execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await]
+                                write_reply(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await);
                             }
 
                             // Inside tx
                             (_, Some(q)) => {
                                 q.push_back(command);
-                                vec![Reply::SimpleString("QUEUED".as_bytes().to_vec())]
+                                write_reply(&mut stream, &Reply::SimpleString("QUEUED".as_bytes().to_vec()));
                             }
-                            (_, None) => vec![execute_command(&producer_ch, client_id, command).await],
+                            (_, None) => {
+                                write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await);
+                            }
                         };
-
-                        for reply in replies {
-                            let _ = write_reply(&mut stream, &reply).await;
-                        }
-
-                        let _ = stream.flush().await;
-                        buffer.fill(0u8);
                     }
                     Err(_) => {
                         // TCP read error, ignore
@@ -1625,9 +1626,12 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
-    //print_buffer(&buffer, n);
+    print_buffer(&buffer, n);
 
     // Read Rdb
+    let n = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
+    print_buffer(&buffer, n);
+
     println!("Handshake complete, starting listening on this connection");
 
     loop {
