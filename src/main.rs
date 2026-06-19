@@ -1619,8 +1619,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     loop {
         select! {
             bytes_read = stream.read(&mut buffer) => {
-                let x = bytes_read.as_ref().unwrap();
-                println!("First message: {}", String::from_utf8(Vec::from(&buffer[..*x])).unwrap());
+                // let x = bytes_read.as_ref().unwrap();
+                // println!("First message: {}", String::from_utf8(Vec::from(&buffer[..*x])).unwrap());
                 match bytes_read {
                     Ok(0) => {
                         println!("Master disconnected");
@@ -1646,8 +1646,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                             }
                         }
                     }
-                    Err(_) => {
-                        println!("TCP error");
+                    Err(e) => {
+                        println!("TCP error: {:?}", e);
                     }
                 }
             }
