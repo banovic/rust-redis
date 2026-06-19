@@ -1624,14 +1624,10 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
-    let n = stream.read(&mut buffer).await.unwrap();
-    print_buffer(&buffer, n);
+    let n = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
+    //print_buffer(&buffer, n);
 
     // Read Rdb
-    buffer.fill(0u8);
-    let _ = stream.read(&mut buffer).await.unwrap();
-
-    //println!("Last handshake message(s) : {:?}", buffer);
     println!("Handshake complete, starting listening on this connection");
 
     loop {
