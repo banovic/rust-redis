@@ -1655,7 +1655,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                         match command {
                             Command::ReplconfAck => {
                                 let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
-                                let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx });
+                                let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
                                 let reply = rsp_rx.await;
                                 println!("Received from master: {:?}", reply);
                                 // let _ = write_reply(&mut stream, &reply).await;
