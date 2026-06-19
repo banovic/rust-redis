@@ -1452,8 +1452,8 @@ async fn handle_client(
                         break;
                     }
                     Ok(n) => {
-                        print_buffer(&buffer, n);
-                        buffer.fill(0u8);
+                        // print_buffer(&buffer, n);
+                        // buffer.fill(0u8);
                         let (input, _) = parse_input_resp(&buffer).unwrap();
                         let command = Command::from_bytes(input).unwrap();
                         match (&command, &mut queue) {
@@ -1529,6 +1529,7 @@ async fn handle_client(
                                 let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
                             }
                         };
+                        buffer.fill(0u8);
                     }
                     Err(_) => {
                         // TCP read error, ignore
