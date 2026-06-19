@@ -1658,9 +1658,16 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                                 let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
                                 let reply = rsp_rx.await;
                                 println!("Received from master: {:?}", reply);
-                                // let _ = write_reply(&mut stream, &reply).await;
-                                // let _ = stream.flush().await;
-                                // buffer.fill(0u8);
+                                match reply {
+                                    Ok(reply) => {
+                                        let _ = write_reply(&mut stream, &reply).await;
+                                        //let _ = stream.flush().await;
+                                        buffer.fill(0u8);
+                                    }
+                                    Err(e) => {
+                                        println!("Error from master: {:?}", e);
+                                    }
+                                }
                             }
                             _ => {
                                 let _ = store_process_tx.send(Envelope::Replicate{ command }).await;
