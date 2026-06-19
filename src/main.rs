@@ -1445,10 +1445,10 @@ async fn handle_client(
                         let command = Command::from_bytes(input).unwrap();
                         match (&command, &mut queue) {
                             (Command::ReplconfListeningPort { port: _ }, _) => {
-                                write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec()));
+                                let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
                             }
                             (Command::ReplconfCapa { capabilites: _ }, _) => {
-                                write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec()));
+                                let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
                             }
                             // Psync
                             (
@@ -1460,58 +1460,60 @@ async fn handle_client(
                             ) => {
                                 let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
                                 // This client is replica
-                                write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec()));
-                                write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap()));
+                                let _ = write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
+                                let _ = write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
                             },
                             // Just echo
-                            (Command::Echo { message }, _) => {write_reply(&mut stream, &Reply::BulkString(message.to_vec()));},
+                            (Command::Echo { message }, _) => {
+                                let _ = write_reply(&mut stream, &Reply::BulkString(message.to_vec())).await;
+                            },
                             (Command::Ping { message }, _) => {
                                 match message {
                                     Some(m) => {
-                                        write_reply(&mut stream, &Reply::BulkString(m.to_vec()));
+                                        let _ = write_reply(&mut stream, &Reply::BulkString(m.to_vec())).await;
                                     },
                                     None => {
-                                        write_reply(&mut stream, &Reply::SimpleString("PONG".as_bytes().to_vec()));
+                                        let _ = write_reply(&mut stream, &Reply::SimpleString("PONG".as_bytes().to_vec())).await;
                                     }
                                 };
                             },
                             // Start tx
                             (Command::Multi, None) => {
                                 queue = Some(VecDeque::new());
-                                write_reply(&mut stream, &Reply::Ok);
+                                let _ = write_reply(&mut stream, &Reply::Ok).await;
                             }
                             (Command::Exec, Some(_)) => {
                                 let commands = queue.take().unwrap();
                                 let tx = Command::InternalExecuteTx {
                                     commands: commands.into(),
                                 };
-                                write_reply(&mut stream, &execute_command(&producer_ch, client_id, tx).await);
+                                let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, tx).await).await;
                             }
                             (Command::Exec, None) => {
-                                write_reply(&mut stream, &Reply::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec()));
+                                let _ = write_reply(&mut stream, &Reply::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
                             },
                             (Command::Watch { keys: _ }, Some(_)) => {
-                                write_reply(&mut stream, &Reply::SimpleError(
+                                let _ = write_reply(&mut stream, &Reply::SimpleError(
                                     "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
-                                ));
+                                )).await;
                             }
                             (Command::Discard, None) => {
-                                write_reply(&mut stream, &Reply::SimpleError(
+                                let _ = write_reply(&mut stream, &Reply::SimpleError(
                                     "ERR DISCARD without MULTI".as_bytes().to_vec(),
-                                ));
+                                )).await;
                             }
                             (Command::Discard, Some(_)) => {
                                 queue = None;
-                                write_reply(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await);
+                                let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await).await;
                             }
 
                             // Inside tx
                             (_, Some(q)) => {
                                 q.push_back(command);
-                                write_reply(&mut stream, &Reply::SimpleString("QUEUED".as_bytes().to_vec()));
+                                let _ = write_reply(&mut stream, &Reply::SimpleString("QUEUED".as_bytes().to_vec())).await;
                             }
                             (_, None) => {
-                                write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await);
+                                let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
                             }
                         };
                     }
