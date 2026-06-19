@@ -1629,8 +1629,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     print_buffer(&buffer, n);
 
     // Read Rdb
-    let n = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
-    print_buffer(&buffer, n);
+    let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
+    //print_buffer(&buffer, n); // RDB file - not valid utf8
 
     println!("Handshake complete, starting listening on this connection");
 
