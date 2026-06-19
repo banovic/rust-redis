@@ -700,7 +700,7 @@ impl Store {
             Command::ReplconfAck => TryExecuteResult::Done(Reply::Array(vec![
                 Reply::BulkString("REPLCONF".as_bytes().to_vec()),
                 Reply::BulkString("ACK".as_bytes().to_vec()),
-                Reply::BulkString("*".as_bytes().to_vec()),
+                Reply::BulkString("0".as_bytes().to_vec()),
             ])),
 
             _ => TryExecuteResult::Done(Reply::Null),
