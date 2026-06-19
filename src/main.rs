@@ -1407,6 +1407,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 reply_channel,
             } => match store.try_execute(0, command) {
                 TryExecuteResult::Done(reply) => {
+                    println!("FromMaster :: {:?}", reply);
                     let _ = reply_channel.send(reply);
                 }
                 _ => {
