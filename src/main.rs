@@ -1680,7 +1680,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                             _ => {
                                 let _ = store_process_tx.send(Envelope::Replicate{ command }).await;
                             }
-                        }
+                        };
+                        buffer.fill(0u8);
                     }
                     Err(e) => {
                         println!("TCP error: {:?}", e);
