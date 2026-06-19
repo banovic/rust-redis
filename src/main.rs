@@ -703,13 +703,13 @@ impl Store {
 }
 
 // milliseconds-seqeunce id
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum XaddStreamIdInput {
     Explicit(u64, u64),
     AutoGenSeq(u64),
     AugoGen,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum XreadStreamIdInput {
     Explicit(u64, u64),
     DollarId,
@@ -885,7 +885,7 @@ async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<(
     result
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Command {
     Echo {
         message: Bytes,
@@ -1220,6 +1220,18 @@ impl Command {
             _ => None,
         }
     }
+
+    fn is_replicatable(&self) -> bool {
+        match self {
+            Command::Set {
+                key: _,
+                value: _,
+                ex: _,
+                px: _,
+            } => true,
+            _ => false,
+        }
+    }
 }
 
 enum Envelope {
@@ -1238,6 +1250,9 @@ enum Envelope {
         client_id: usize,
         tx: mpsc::Sender<Command>,
     },
+    Replicate {
+        command: Command,
+    },
 }
 
 // This layer handles timeouts
@@ -1250,9 +1265,24 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 reply_channel,
             } => {
                 let timeout = command.block_timeout();
+                let replication_command = if command.is_replicatable() {
+                    Some(command.clone())
+                } else {
+                    None
+                };
+
                 match store.try_execute(client_id, command) {
                     TryExecuteResult::Done(reply) => {
                         let _ = reply_channel.send(reply);
+                        if let Some(replication_command) = replication_command {
+                            for (client_id, tx) in &store.replicas {
+                                println!(
+                                    "[client_id = {}] Replicating command: {:?}",
+                                    client_id, replication_command
+                                );
+                                let _ = tx.send(replication_command.clone()).await;
+                            }
+                        }
                     }
                     TryExecuteResult::BlockingXread(waiter_id, keys, ids) => {
                         // Register interest in updates vs timeout conundrums
@@ -1295,6 +1325,10 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             Envelope::AddReplica { client_id, tx } => {
                 store.replicas.insert(client_id, tx);
             }
+            // This is command execution on replica
+            Envelope::Replicate { command } => {
+                let _ = store.try_execute(0, command); // TODO client_id should be Option<usize>
+            }
         }
     }
 }
@@ -1307,6 +1341,8 @@ async fn handle_client(
     println!("Connected client {}", client_id);
     let mut queue: Option<VecDeque<Command>> = None; //VecDeque::new();
     let mut buffer = [0u8; 1024];
+
+    // Channel to this client, so master can send commands for replication
     let (tx, mut rx) = mpsc::channel::<Command>(1024);
 
     loop {
@@ -1529,11 +1565,7 @@ struct Args {
 }
 
 // This is run when server is replica
-async fn run_master_connection(
-    addr: String,
-    port: u16,
-    mut store_process_tx: mpsc::Sender<Envelope>,
-) {
+async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender<Envelope>) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut buffer = [0; 1024];
 
@@ -1572,26 +1604,26 @@ async fn run_master_connection(
 
     println!("Last handshake message(s) : {:?}", buffer);
 
-    //    let (tx, rx) = mpsc::channel::<Command>(1024);
-    // store_process_tx
-    //     .send(Envelope::AddReplica { ctx: tx.clone() })
-    //     .await;
-
-    // Read commands for replication
-    // while let Some(command) = rx.recv().await {
-    //     // Decode command to bytes and write to stream
-    // }
-    // while let Ok(n) = stream.read(&mut buffer).await {
-    //     if n == 0 {
-    //         break;
-    //     }
-
-    //     // Parse input resp into Vec<Bytes>
-    //     let (input, _) = parse_input_resp(&buffer).unwrap();
-
-    //     let command = Command::from_bytes(input).unwrap();
-    //     println!("[REPLICA] command: {:?}", command);
-    // }
+    loop {
+        select! {
+            bytes_read = stream.read(&mut buffer) => {
+                match bytes_read {
+                    Ok(0) => {
+                        println!("Master disconnected");
+                    }
+                    Ok(_) => {
+                        // Execute (replicate) command
+                        let (input, _) = parse_input_resp(&buffer).unwrap();
+                        let command = Command::from_bytes(input).unwrap();
+                        let _ = store_process_tx.send(Envelope::Replicate{command}).await;
+                    }
+                    Err(e) => {
+                        println!("TCP error: {:?}", e);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -1614,7 +1646,7 @@ async fn main() {
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     if let Some(addr) = master_addr {
-        tokio::spawn(run_master_connection(addr, port, tx.clone()));
+        tokio::spawn(run_replica(addr, port, tx.clone()));
     }
 
     // Uncomment the code below to pass the first stage
