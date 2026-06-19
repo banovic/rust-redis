@@ -1573,6 +1573,13 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 }
+fn print_buffer(b: &[u8], n: usize) {
+    let s = String::from_utf8(b[..n].to_vec());
+    match s {
+        Ok(sb) => println!("{}", sb),
+        Err(e) => println!("ERROR WHILE PRINTING BUFFER: {:?}", e),
+    };
+}
 
 // This is run when server is replica
 async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender<Envelope>) {
@@ -1583,7 +1590,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     // PING - PONG
     let message = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
     let _ = stream.write_all(&encode_reply(&message)).await;
-    let bytes_read = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap();
+    print_buffer(&buffer, n);
 
     // REPLCONF
     let message = Reply::Array(vec![
@@ -1592,7 +1600,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString(format!("{}", port).as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
-    let bytes_read = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap();
+    print_buffer(&buffer, n);
 
     // REPLCONF
     let message = Reply::Array(vec![
@@ -1601,7 +1610,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString("psync2".as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
-    let bytes_read = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap();
+    print_buffer(&buffer, n);
 
     // PSYNC
     let message = Reply::Array(vec![
@@ -1610,10 +1620,11 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString("-1".as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
-    let bytes_read = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap();
+    //let bytes_read = stream.read(&mut buffer).await.unwrap();
+    print_buffer(&buffer, n);
 
     // Read Rdb?
-    let bytes_read = stream.read(&mut buffer).await.unwrap();
     println!("Last handshake message(s) : {:?}", buffer);
 
     loop {
