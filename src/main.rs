@@ -1621,23 +1621,24 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     let n = stream.read(&mut buffer).await.unwrap();
-    //let bytes_read = stream.read(&mut buffer).await.unwrap();
     print_buffer(&buffer, n);
 
-    // Read Rdb?
-    println!("Last handshake message(s) : {:?}", buffer);
+    // Read Rdb
+    let _ = stream.read(&mut buffer).await.unwrap();
+
+    //println!("Last handshake message(s) : {:?}", buffer);
+    println!("Handhske complete, starting listening on this connection");
 
     loop {
         select! {
             bytes_read = stream.read(&mut buffer) => {
-                // let x = bytes_read.as_ref().unwrap();
-                // println!("First message: {}", String::from_utf8(Vec::from(&buffer[..*x])).unwrap());
                 match bytes_read {
                     Ok(0) => {
                         println!("Master disconnected");
                         break;
                     }
-                    Ok(_) => {
+                    Ok(n) => {
+                        print_buffer(&buffer, n);
                         // Execute (replicate) command
                         let (input, _) = parse_input_resp(&buffer).unwrap();
                         let command = Command::from_bytes(input).unwrap();
