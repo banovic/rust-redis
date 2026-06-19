@@ -1641,7 +1641,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                         break;
                     }
                     Ok(n) => {
-                        print_buffer(&buffer, n);
+                        //print_buffer(&buffer, n);
                         // Execute (replicate) command
                         let (input, _) = parse_input_resp(&buffer).unwrap();
                         let command = Command::from_bytes(input).unwrap();
