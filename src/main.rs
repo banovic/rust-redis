@@ -971,6 +971,7 @@ enum Command {
         replication_id: String,
         offset: i64,
     },
+    ReplconfAck,
 }
 
 impl Command {
@@ -1160,6 +1161,14 @@ impl Command {
                     b"capa" => Some(Command::ReplconfCapa {
                         capabilites: bs.into(),
                     }),
+                    b"GETACK" => {
+                        let star = bs.pop_front().unwrap();
+                        if star.len() == 1 && star[0] == b'*' {
+                            Some(Command::ReplconfAck)
+                        } else {
+                            None
+                        }
+                    }
                     _ => panic!("Unknown REPLCONF shape"),
                 }
             }
@@ -1412,6 +1421,9 @@ async fn handle_client(
                         let command = Command::from_bytes(input).unwrap();
                         let replies = match (&command, &mut queue) {
                             // Replconf's
+                            (Command::ReplconfAck, _) => {
+                                vec![Reply::Array(vec![Reply::BulkString("REPLCONF".as_bytes().to_vec()), Reply::BulkString("ACK".as_bytes().to_vec()), Reply::BulkString("*".as_bytes().to_vec())])]
+                            }
                             (Command::ReplconfListeningPort { port: _ }, _) => {
                                 vec![Reply::SimpleString("OK".as_bytes().to_vec())]
                             }
