@@ -1590,6 +1590,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     // PING - PONG
     let message = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
     let _ = stream.write_all(&encode_reply(&message)).await;
+    buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap();
     print_buffer(&buffer, n);
 
@@ -1600,6 +1601,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString(format!("{}", port).as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
+    buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap();
     print_buffer(&buffer, n);
 
@@ -1610,6 +1612,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString("psync2".as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
+    buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap();
     print_buffer(&buffer, n);
 
@@ -1620,14 +1623,16 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString("-1".as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
+    buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap();
     print_buffer(&buffer, n);
 
     // Read Rdb
+    buffer.fill(0u8);
     let _ = stream.read(&mut buffer).await.unwrap();
 
     //println!("Last handshake message(s) : {:?}", buffer);
-    println!("Handhske complete, starting listening on this connection");
+    println!("Handshake complete, starting listening on this connection");
 
     loop {
         select! {
