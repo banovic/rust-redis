@@ -1613,7 +1613,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let bytes_read = stream.read(&mut buffer).await.unwrap();
 
     // Read Rdb?
-    //let bytes_read = stream.read(&mut buffer).await.unwrap();
+    let bytes_read = stream.read(&mut buffer).await.unwrap();
     println!("Last handshake message(s) : {:?}", buffer);
 
     loop {
