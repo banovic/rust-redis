@@ -1671,6 +1671,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                 match bytes_read {
                     Ok(0) => {
                         println!("Master disconnected");
+                        break;
                     }
                     Ok(_) => {
                         // Execute (replicate) command
