@@ -1445,7 +1445,8 @@ async fn handle_client(
                         // Client closed connection
                         break;
                     }
-                    Ok(_) => {
+                    Ok(n) => {
+                        print_buffer(&buffer, n);
                         buffer.fill(0u8);
                         let (input, _) = parse_input_resp(&buffer).unwrap();
                         let command = Command::from_bytes(input).unwrap();
