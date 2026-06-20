@@ -812,10 +812,10 @@ fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Byte
         //b'$' => parse_bulk_string(input).map_or(default, f),
         b'*' => parse_array(input),
         _ => {
-            println!(
-                "Error parsing RESP, input: {}",
-                String::from_utf8(input.to_vec()).unwrap()
-            );
+            // println!(
+            //     "Error parsing RESP, input: {}",
+            //     String::from_utf8(input.to_vec()).unwrap()
+            // );
             Err(ParseError {
                 message: format!("unknown RESP first byte: {}", input[0]),
             })
@@ -1632,7 +1632,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let message = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
-    let n = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap(); // +PONG
     print_buffer(&buffer, n);
 
     // REPLCONF
@@ -1643,7 +1643,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
-    let n = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap(); // +OK
     print_buffer(&buffer, n);
 
     // REPLCONF
@@ -1654,7 +1654,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
-    let n = stream.read(&mut buffer).await.unwrap();
+    let n = stream.read(&mut buffer).await.unwrap(); // +OK
     print_buffer(&buffer, n);
 
     // PSYNC
