@@ -1675,8 +1675,9 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
             bytes_read = stream.read(&mut buffer) => {
                 match bytes_read {
                     Ok(0) => {
-                        println!("Master disconnected");
-                        break;
+                        //println!("Master disconnected");
+                        println!("Received 0 bytes from master, continue?");
+                        continue;
                     }
                     Ok(n) => {
                         //print_buffer(&buffer, n);
