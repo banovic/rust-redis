@@ -1626,7 +1626,6 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +PONG
-    print_buffer(&buffer, n);
 
     // REPLCONF
     let message = Reply::Array(vec![
@@ -1637,7 +1636,6 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +OK
-    print_buffer(&buffer, n);
 
     // REPLCONF
     let message = Reply::Array(vec![
@@ -1648,7 +1646,6 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +OK
-    print_buffer(&buffer, n);
 
     // PSYNC
     let message = Reply::Array(vec![
@@ -1659,7 +1656,6 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
-    //print_buffer(&buffer, n); // Dont' print, not valid utf8
 
     println!("Handshake complete, starting listening on this connection");
 
