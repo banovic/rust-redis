@@ -823,6 +823,24 @@ fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Byte
     }
 }
 
+fn parse_all_resp_arrays<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<VecDeque<Bytes>>> {
+    let mut arrays = Vec::new();
+    let mut next_input = input;
+    loop {
+        match parse_input_resp(next_input) {
+            Ok((array, new_input)) => {
+                next_input = new_input;
+                arrays.push(array);
+            }
+            Err(e) => {
+                println!("Error parsing all resp arrays: {:?}", e);
+                break;
+            }
+        }
+    }
+    Ok((arrays, next_input))
+}
+
 fn write_usize(out: &mut Vec<u8>, n: usize) {
     let mut s = n.to_string().into_bytes();
     out.append(&mut s);
@@ -1454,81 +1472,87 @@ async fn handle_client(
                     Ok(n) => {
                         // print_buffer(&buffer, n);
                         // buffer.fill(0u8);
-                        let (input, _) = parse_input_resp(&buffer).unwrap();
-                        let command = Command::from_bytes(input).unwrap();
-                        match (&command, &mut queue) {
-                            (Command::ReplconfListeningPort { port: _ }, _) => {
-                                let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
-                            }
-                            (Command::ReplconfCapa { capabilites: _ }, _) => {
-                                let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
-                            }
-                            // Psync
-                            (
-                                Command::Psync {
-                                    replication_id: _,
-                                    offset: _,
-                                },
-                                _,
-                            ) => {
-                                let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
-                                // This client is replica
-                                let _ = write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
-                                let _ = write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
-                            },
-                            // Just echo
-                            (Command::Echo { message }, _) => {
-                                let _ = write_reply(&mut stream, &Reply::BulkString(message.to_vec())).await;
-                            },
-                            (Command::Ping { message }, _) => {
-                                match message {
-                                    Some(m) => {
-                                        let _ = write_reply(&mut stream, &Reply::BulkString(m.to_vec())).await;
-                                    },
-                                    None => {
-                                        let _ = write_reply(&mut stream, &Reply::SimpleString("PONG".as_bytes().to_vec())).await;
-                                    }
-                                };
-                            },
-                            // Start tx
-                            (Command::Multi, None) => {
-                                queue = Some(VecDeque::new());
-                                let _ = write_reply(&mut stream, &Reply::Ok).await;
-                            }
-                            (Command::Exec, Some(_)) => {
-                                let commands = queue.take().unwrap();
-                                let tx = Command::InternalExecuteTx {
-                                    commands: commands.into(),
-                                };
-                                let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, tx).await).await;
-                            }
-                            (Command::Exec, None) => {
-                                let _ = write_reply(&mut stream, &Reply::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
-                            },
-                            (Command::Watch { keys: _ }, Some(_)) => {
-                                let _ = write_reply(&mut stream, &Reply::SimpleError(
-                                    "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
-                                )).await;
-                            }
-                            (Command::Discard, None) => {
-                                let _ = write_reply(&mut stream, &Reply::SimpleError(
-                                    "ERR DISCARD without MULTI".as_bytes().to_vec(),
-                                )).await;
-                            }
-                            (Command::Discard, Some(_)) => {
-                                queue = None;
-                                let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await).await;
-                            }
 
-                            // Inside tx
-                            (_, Some(q)) => {
-                                q.push_back(command);
-                                let _ = write_reply(&mut stream, &Reply::SimpleString("QUEUED".as_bytes().to_vec())).await;
-                            }
-                            (_, None) => {
-                                let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
-                            }
-                        };
+                        // Multiple commands can come together
+                        //let (input, _) = parse_input_resp(&buffer).unwrap();
+                        let (inputs, _) = parse_all_resp_arrays(&buffer).unwrap();
+                        let commands = inputs.iter().map(|input| Command::from_bytes(input.clone()).unwrap()).collect::<Vec<_>>();
+
+                        for command in commands {
+                            match (&command, &mut queue) {
+                                (Command::ReplconfListeningPort { port: _ }, _) => {
+                                    let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
+                                }
+                                (Command::ReplconfCapa { capabilites: _ }, _) => {
+                                    let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
+                                }
+                                // Psync
+                                (
+                                    Command::Psync {
+                                        replication_id: _,
+                                        offset: _,
+                                    },
+                                    _,
+                                ) => {
+                                    let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
+                                    // This client is replica
+                                    let _ = write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
+                                    let _ = write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
+                                },
+                                // Just echo
+                                (Command::Echo { message }, _) => {
+                                    let _ = write_reply(&mut stream, &Reply::BulkString(message.to_vec())).await;
+                                },
+                                (Command::Ping { message }, _) => {
+                                    match message {
+                                        Some(m) => {
+                                            let _ = write_reply(&mut stream, &Reply::BulkString(m.to_vec())).await;
+                                        },
+                                        None => {
+                                            let _ = write_reply(&mut stream, &Reply::SimpleString("PONG".as_bytes().to_vec())).await;
+                                        }
+                                    };
+                                },
+                                // Start tx
+                                (Command::Multi, None) => {
+                                    queue = Some(VecDeque::new());
+                                    let _ = write_reply(&mut stream, &Reply::Ok).await;
+                                }
+                                (Command::Exec, Some(_)) => {
+                                    let commands = queue.take().unwrap();
+                                    let tx = Command::InternalExecuteTx {
+                                        commands: commands.into(),
+                                    };
+                                    let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, tx).await).await;
+                                }
+                                (Command::Exec, None) => {
+                                    let _ = write_reply(&mut stream, &Reply::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
+                                },
+                                (Command::Watch { keys: _ }, Some(_)) => {
+                                    let _ = write_reply(&mut stream, &Reply::SimpleError(
+                                        "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
+                                    )).await;
+                                }
+                                (Command::Discard, None) => {
+                                    let _ = write_reply(&mut stream, &Reply::SimpleError(
+                                        "ERR DISCARD without MULTI".as_bytes().to_vec(),
+                                    )).await;
+                                }
+                                (Command::Discard, Some(_)) => {
+                                    queue = None;
+                                    let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await).await;
+                                }
+
+                                // Inside tx
+                                (_, Some(q)) => {
+                                    q.push_back(command);
+                                    let _ = write_reply(&mut stream, &Reply::SimpleString("QUEUED".as_bytes().to_vec())).await;
+                                }
+                                (_, None) => {
+                                    let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
+                                }
+                            };
+                        }
                         buffer.fill(0u8);
                     }
                     Err(_) => {
@@ -1657,30 +1681,34 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                     Ok(n) => {
                         //print_buffer(&buffer, n);
                         // Execute (replicate) command
-                        let (input, _) = parse_input_resp(&buffer).unwrap();
-                        let command = Command::from_bytes(input).unwrap();
-                        println!("Replica received command: {:?}", command);
-                        match command {
-                            Command::ReplconfAck => {
-                                let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
-                                let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
-                                let reply = rsp_rx.await;
-                                println!("Received from master: {:?}", reply);
-                                match reply {
-                                    Ok(reply) => {
-                                        let _ = write_reply(&mut stream, &reply).await;
-                                        //let _ = stream.flush().await;
-                                        buffer.fill(0u8);
-                                    }
-                                    Err(e) => {
-                                        println!("Error from master: {:?}", e);
+                        //let (input, _) = parse_input_resp(&buffer).unwrap();
+                        let (inputs, _) = parse_all_resp_arrays(&buffer).unwrap();
+                        let commands = inputs.iter().map(|input| Command::from_bytes(input.clone()).unwrap()).collect::<Vec<_>>();
+                        println!("Replica received commands: {:?}", commands);
+
+                        for command in commands {
+                            match command {
+                                Command::ReplconfAck => {
+                                    let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
+                                    let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
+                                    let reply = rsp_rx.await;
+                                    println!("Received from master: {:?}", reply);
+                                    match reply {
+                                        Ok(reply) => {
+                                            let _ = write_reply(&mut stream, &reply).await;
+                                            //let _ = stream.flush().await;
+                                            buffer.fill(0u8);
+                                        }
+                                        Err(e) => {
+                                            println!("Error from master: {:?}", e);
+                                        }
                                     }
                                 }
-                            }
-                            _ => {
-                                let _ = store_process_tx.send(Envelope::Replicate{ command }).await;
-                            }
-                        };
+                                _ => {
+                                    let _ = store_process_tx.send(Envelope::Replicate{ command }).await;
+                                }
+                            };
+                        }
                         buffer.fill(0u8);
                     }
                     Err(e) => {
