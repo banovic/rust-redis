@@ -51,6 +51,8 @@ pub fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
 /// Read `tag` bytes.
 pub fn tag<'a>(expected: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
+        println!("[tag] input: {:?}", input);
+        println!("[tag] expected: {:?}", expected);
         if input.starts_with(expected) {
             Ok(input.split_at(expected.len()))
         } else {
