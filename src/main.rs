@@ -62,6 +62,29 @@ enum Reply {
     RdbFile(Vec<u8>),
 }
 
+enum RespElement {
+    String(Vec<u8>),
+    Array(Vec<RespElement>),
+}
+
+impl RespElement {
+    fn to_words(&self) -> VecDeque<Bytes> {
+        match self {
+            RespElement::String(s) => VecDeque::from([s.clone()]),
+            // Only flat arrays
+            RespElement::Array(a) => {
+                let mut ws = VecDeque::new();
+                for w in a {
+                    if let RespElement::String(word) = w {
+                        ws.push_back(word.clone());
+                    }
+                }
+                ws
+            }
+        }
+    }
+}
+
 type RedisStream = BTreeMap<StreamKey, Vec<Bytes>>;
 
 #[derive(Debug)]
@@ -777,32 +800,44 @@ fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, 
     }
 }
 
-fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, Bytes> {
+fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+    let ((_, s, _), rest) = and!(
+        byte(b'+'),
+        take_until(&[b'\r', b'\n']),
+        tag(&[b'\r', b'\n'])
+    )
+    .parse(input)?;
+
+    Ok((RespElement::String(s.to_vec()), rest))
+}
+
+fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
     let ((_, s, _), rest) =
         and!(tag(&[b'\r', b'\n']), take(l), tag(&[b'\r', b'\n'])).parse(rest)?;
 
-    Ok((s.to_vec(), rest))
+    Ok((RespElement::String(s.to_vec()), rest))
 }
 
-fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Bytes>> {
+fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     let ((_, l, _), rest) =
         and!(byte(b'*'), integer::<usize>(), tag(&[b'\r', b'\n'])).parse(input)?;
 
-    let mut elements: VecDeque<Bytes> = VecDeque::new();
+    let mut elements: Vec<RespElement> = Vec::new();
     let mut new_rest = rest;
     for _ in 0..l {
-        let (el, rest) = parse_bulk_string(new_rest)?;
+        let (el, rest) = parse_input_resp(new_rest)?;
         new_rest = rest;
-        elements.push_back(el);
+        elements.push(el);
     }
 
-    Ok((elements, new_rest))
+    Ok((RespElement::Array(elements), new_rest))
 }
 
-fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Bytes>> {
+fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     match input[0] {
-        //b'$' => parse_bulk_string(input).map_or(default, f),
+        b'$' => parse_bulk_string(input),
+        b'+' => parse_simple_string(input),
         b'*' => parse_array(input),
         _ => {
             // println!(
@@ -816,7 +851,7 @@ fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Byte
     }
 }
 
-fn parse_all_resp_arrays<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<VecDeque<Bytes>>> {
+fn parse_all_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<RespElement>> {
     let mut arrays = Vec::new();
     let mut next_input = input;
     loop {
@@ -1468,8 +1503,8 @@ async fn handle_client(
 
                         // Multiple commands can come together
                         //let (input, _) = parse_input_resp(&buffer).unwrap();
-                        let (inputs, _) = parse_all_resp_arrays(&buffer).unwrap();
-                        let commands = inputs.iter().map(|input| Command::from_bytes(input.clone()).unwrap()).collect::<Vec<_>>();
+                        let (inputs, _) = parse_all_resp(&buffer).unwrap();
+                        let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
                         for command in commands {
                             match (&command, &mut queue) {
@@ -1677,8 +1712,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                                     //print_buffer(&buffer, n);
                                     // Execute (replicate) command
                                     //let (input, _) = parse_input_resp(&buffer).unwrap();
-                                    let (inputs, _) = parse_all_resp_arrays(&buffer).unwrap();
-                                    let commands = inputs.iter().map(|input| Command::from_bytes(input.clone()).unwrap()).collect::<Vec<_>>();
+                                    let (inputs, _) = parse_all_resp(&buffer).unwrap();
+                                    let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
                                     println!("Replica received commands: {:?}", commands);
 
                                     for command in commands {
