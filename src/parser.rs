@@ -110,6 +110,9 @@ pub fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
         let mut i = 0;
         while i < input.len() - delimiter.len() {
             if input[i..].starts_with(delimiter) {
+                let x = input.split_at(i);
+                println!("[take_until] 0: {:?}", x.0);
+                println!("[take_until] 1: {:?}", x.1);
                 return Ok(input.split_at(i));
             }
             i += 1;
