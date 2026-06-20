@@ -810,7 +810,7 @@ fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, VecDeque<Byte
             //     String::from_utf8(input.to_vec()).unwrap()
             // );
             Err(ParseError {
-                message: format!("unknown RESP first byte: {}", input[0]),
+                message: format!("unknown RESP first byte: {}, input: {:?}", input[0], input),
             })
         }
     }
