@@ -46,12 +46,6 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
         .collect()
 }
 
-// macro_rules! list_get {
-//     ($key: ident, $some_expr: expr, $none_expr: expr) => {
-
-//     };
-// }
-
 type Bytes = Vec<u8>;
 
 #[derive(Debug)]
@@ -68,7 +62,6 @@ enum Reply {
     RdbFile(Vec<u8>),
 }
 
-//type RedisList = VecDeque<Bytes>;
 type RedisStream = BTreeMap<StreamKey, Vec<Bytes>>;
 
 #[derive(Debug)]
