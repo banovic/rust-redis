@@ -713,6 +713,14 @@ impl Store {
                 TryExecuteResult::Done(Reply::BulkString(info.as_bytes().to_vec()))
             }
 
+            Command::Ping { message } => {
+                let result = match message {
+                    Some(m) => Reply::BulkString(m),
+                    None => Reply::SimpleString("PONG".as_bytes().to_vec()),
+                };
+                TryExecuteResult::Done(result)
+            }
+
             Command::ReplconfAck => TryExecuteResult::Done(Reply::Array(vec![
                 Reply::BulkString("REPLCONF".as_bytes().to_vec()),
                 Reply::BulkString("ACK".as_bytes().to_vec()),
