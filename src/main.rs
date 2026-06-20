@@ -62,6 +62,7 @@ enum Reply {
     RdbFile(Vec<u8>),
 }
 
+#[derive(Debug)]
 enum RespElement {
     String(Vec<u8>),
     Array(Vec<RespElement>),
@@ -1702,6 +1703,11 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     buffer.fill(0u8);
     let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
     //println!("{:?}", buffer);
+    let (inputs, _) = parse_all_resp(&buffer).unwrap();
+    println!(
+        "Replica received parts of input before handshake: {:?}",
+        inputs
+    );
 
     println!("Handshake complete, starting listening on this connection");
 
