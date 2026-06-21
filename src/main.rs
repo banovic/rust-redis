@@ -86,6 +86,14 @@ impl RespElement {
             }
         }
     }
+
+    fn size(&self) -> usize {
+        match self {
+            RespElement::Array(a) => a.iter().map(|r| r.size()).sum(),
+            RespElement::File(f) => f.len(),
+            RespElement::String(s) => s.len(),
+        }
+    }
 }
 
 type RedisStream = BTreeMap<StreamKey, Vec<Bytes>>;
@@ -1788,10 +1796,12 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                             new_inputs
                         };
 
-                        let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
-                        println!("Replica received commands: {:?}", commands);
+                        // let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
-                        for command in commands {
+                        for input in inputs {
+                            let command = Command::from_bytes(input.to_words()).unwrap();
+                            println!("Replica processing command: {:?}", command);
+
                             match command {
                                 Command::ReplconfAck => {
                                     let reply = Reply::Array(vec![
@@ -1823,11 +1833,11 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                                 // //   buffer.fill(0u8);
                                 // }
                                 _ => {
-                                    let _ = store_process_tx.send(Envelope::Replicate{ command }).await;
+                                    let _ = store_process_tx.send(Envelope::Replicate{ command: command.clone() }).await;
                                 }
                             };
+                            ack_bytes += input.size();
                         }
-                        ack_bytes += n;
                         buffer.fill(0u8);
                     }
                     Err(e) => {
