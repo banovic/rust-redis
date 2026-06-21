@@ -62,7 +62,7 @@ enum Reply {
     RdbFile(Vec<u8>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum RespElement {
     String(Vec<u8>),
     File(Vec<u8>),
@@ -1747,14 +1747,16 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
 
     // TODO - must read exactly: FULLRESYNC respons and RDB file, and it can come in 1 or 2 messages
     let mut handshake_complete = false;
+    let mut initial_input_parts = Vec::new();
     while !handshake_complete {
         buffer.fill(0u8);
         let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
-        let (inputs, _) = parse_all_resp(&buffer).unwrap();
-        for input in &inputs {
+        let (mut inputs, _) = parse_all_resp(&buffer).unwrap();
+        for (i, input) in inputs.iter().enumerate() {
             if let RespElement::File(_) = input {
                 println!("Got RDB file");
                 handshake_complete = true;
+                initial_input_parts = inputs.split_off(i);
                 println!("INPUTS: {:?}", inputs);
                 break;
             }
@@ -1774,7 +1776,16 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                         break;
                     }
                     Ok(n) => {
-                        let (inputs, _) = parse_all_resp(&buffer).unwrap();
+                        let (new_inputs, _) = parse_all_resp(&buffer).unwrap();
+                        let is_initial_input_parts_empty = !initial_input_parts.is_empty();
+                        let inputs = if is_initial_input_parts_empty {
+                            let x = initial_input_parts.clone().into_iter().chain(new_inputs.into_iter()).collect();
+                            initial_input_parts.clear();
+                            x
+                        } else {
+                            new_inputs
+                        };
+
                         let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
                         println!("Replica received commands: {:?}", commands);
 
