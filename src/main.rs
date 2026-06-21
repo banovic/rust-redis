@@ -1748,11 +1748,21 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     buffer.fill(0u8);
     let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
     //println!("{:?}", buffer);
-    let (inputs, _) = parse_all_resp(&buffer).unwrap();
-    println!(
-        "Replica received parts of input before handshake: {:?}",
-        inputs
-    );
+
+    // TODO - must read exactly: FULLRESYNC respons and RDB file, and it can come in 1 or 2 messages
+    let mut handshake_complete = false;
+    while !handshake_complete {
+        buffer.fill(0u8);
+        let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
+        let (inputs, _) = parse_all_resp(&buffer).unwrap();
+        for input in inputs {
+            if let RespElement::File(_) = input {
+                println!("Got RDB file");
+                handshake_complete = true;
+                break;
+            }
+        }
+    }
 
     println!("Handshake complete, starting listening on this connection");
 
