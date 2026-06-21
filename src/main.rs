@@ -896,7 +896,8 @@ fn parse_all_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<RespElement
                 arrays.push(array);
             }
             Err(e) => {
-                println!("Error parsing all resp arrays: {:?}", e);
+                // TODO must check if input is exhausted - which is ok, vs actual error
+                //println!("Error parsing all resp arrays: {:?}", e);
                 break;
             }
         }
