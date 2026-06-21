@@ -869,7 +869,9 @@ fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
 
 fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     match input[0] {
-        b'$' => parse_bulk_string(input).or(parse_rdb_file(input)),
+        // Rdb file is encoded as same as bulk string - *but* it is missing ending 'r\\n' bytes (2 bytes).
+        // First match greedy for bulk string, and fallback to rdb file:
+        b'$' => parse_bulk_string(input).or_else(|_| parse_rdb_file(input)),
         b'+' => parse_simple_string(input),
         b'*' => parse_array(input),
         _ => {
@@ -1694,7 +1696,13 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +PONG
-    //println!("{:?}", buffer);
+    if n == 0 {
+        println!(
+            "Error during handshake, expecting +PONG, buffer: {:?}",
+            buffer
+        );
+        return;
+    }
     // REPLCONF
     let message = Reply::Array(vec![
         Reply::BulkString("REPLCONF".as_bytes().to_vec()),
@@ -1704,7 +1712,13 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +OK
-    //println!("{:?}", buffer);
+    if n == 0 {
+        println!(
+            "Error during handshake, expecting +OK (first REPLCONF), buffer: {:?}",
+            buffer
+        );
+        return;
+    }
 
     // REPLCONF
     let message = Reply::Array(vec![
@@ -1715,7 +1729,13 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
     let _ = stream.write_all(&encode_reply(&message)).await;
     buffer.fill(0u8);
     let n = stream.read(&mut buffer).await.unwrap(); // +OK
-    //println!("{:?}", buffer);
+    if n == 0 {
+        println!(
+            "Error during handshake, expecting +OK (second REPLCONF), buffer: {:?}",
+            buffer
+        );
+        return;
+    }
 
     // PSYNC
     let message = Reply::Array(vec![

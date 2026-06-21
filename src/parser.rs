@@ -51,8 +51,8 @@ pub fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
 /// Read `tag` bytes.
 pub fn tag<'a>(expected: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
-        println!("[tag] input: {:?}", input);
-        println!("[tag] expected: {:?}", expected);
+        // println!("[tag] input: {:?}", input);
+        // println!("[tag] expected: {:?}", expected);
         if input.starts_with(expected) {
             Ok(input.split_at(expected.len()))
         } else {
@@ -112,9 +112,9 @@ pub fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
         let mut i = 0;
         while i < input.len() - delimiter.len() {
             if input[i..].starts_with(delimiter) {
-                let x = input.split_at(i);
-                println!("[take_until] 0: {:?}", x.0);
-                println!("[take_until] 1: {:?}", x.1);
+                //let x = input.split_at(i); // debug
+                // println!("[take_until] 0: {:?}", x.0);
+                // println!("[take_until] 1: {:?}", x.1);
                 return Ok(input.split_at(i));
             }
             i += 1;
