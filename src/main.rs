@@ -1751,10 +1751,11 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         buffer.fill(0u8);
         let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
         let (inputs, _) = parse_all_resp(&buffer).unwrap();
-        for input in inputs {
+        for input in &inputs {
             if let RespElement::File(_) = input {
                 println!("Got RDB file");
                 handshake_complete = true;
+                println!("INPUTS: {:?}", inputs);
                 break;
             }
         }
