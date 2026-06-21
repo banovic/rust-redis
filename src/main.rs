@@ -65,6 +65,7 @@ enum Reply {
 #[derive(Debug)]
 enum RespElement {
     String(Vec<u8>),
+    File(Vec<u8>),
     Array(Vec<RespElement>),
 }
 
@@ -72,6 +73,7 @@ impl RespElement {
     fn to_words(&self) -> VecDeque<Bytes> {
         match self {
             RespElement::String(s) => VecDeque::from([s.clone()]),
+            RespElement::File(f) => VecDeque::from([f.clone()]),
             // Only flat arrays
             RespElement::Array(a) => {
                 let mut ws = VecDeque::new();
@@ -809,6 +811,21 @@ fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, 
     }
 }
 
+// fn parse_simple_string<'a>() -> impl Parser<'a, RespElement> {
+//     move |input| match and!(
+//         byte(b'+'),
+//         take_until(&[b'\r', b'\n']),
+//         tag(&[b'\r', b'\n'])
+//     )
+//     .parse(input)
+//     {
+//         Ok(((_, s, _), rest)) => Ok((RespElement::String(s.to_vec()), rest)),
+//         _ => Err(ParseError {
+//             message: "Failed to parse simple string".to_string(),
+//         }),
+//     }
+// }
+
 fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     let ((_, s, _), rest) = and!(
         byte(b'+'),
@@ -828,6 +845,13 @@ fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement>
     Ok((RespElement::String(s.to_vec()), rest))
 }
 
+fn parse_rdb_file<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+    let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
+    let ((_, s), rest) = and!(tag(&[b'\r', b'\n']), take(l)).parse(rest)?;
+
+    Ok((RespElement::File(s.to_vec()), rest))
+}
+
 fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     let ((_, l, _), rest) =
         and!(byte(b'*'), integer::<usize>(), tag(&[b'\r', b'\n'])).parse(input)?;
@@ -845,7 +869,7 @@ fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
 
 fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
     match input[0] {
-        b'$' => parse_bulk_string(input),
+        b'$' => parse_bulk_string(input).or(parse_rdb_file(input)),
         b'+' => parse_simple_string(input),
         b'*' => parse_array(input),
         _ => {
