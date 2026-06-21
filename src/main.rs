@@ -1745,8 +1745,8 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         Reply::BulkString("-1".as_bytes().to_vec()),
     ]);
     let _ = stream.write_all(&encode_reply(&message)).await;
-    buffer.fill(0u8);
-    let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
+    // buffer.fill(0u8);
+    // let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
     //println!("{:?}", buffer);
 
     // TODO - must read exactly: FULLRESYNC respons and RDB file, and it can come in 1 or 2 messages
