@@ -1707,23 +1707,34 @@ async fn process_replica_message(
     input: RespElement,
     ack_bytes: usize,
 ) -> Option<Reply> {
-    let command = Command::from_bytes(input.to_words()).unwrap();
-    println!("Replica processing command: {:?}", command);
-
-    match command {
-        Command::ReplconfAck => Some(Reply::Array(vec![
-            Reply::BulkString("REPLCONF".as_bytes().to_vec()),
-            Reply::BulkString("ACK".as_bytes().to_vec()),
-            Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
-        ])),
-        _ => {
-            let _ = store_tx
-                .send(Envelope::Replicate {
-                    command: command.clone(),
-                })
-                .await;
-            None
-        }
+    println!("Replica processing input: {:?}", input);
+    if let Some(command) = Command::from_bytes(input.to_words()) {
+        println!(
+            "[process_replica_message] input: {:?}, command: {:?}",
+            input, command
+        );
+        let reply = match command {
+            Command::ReplconfAck => Some(Reply::Array(vec![
+                Reply::BulkString("REPLCONF".as_bytes().to_vec()),
+                Reply::BulkString("ACK".as_bytes().to_vec()),
+                Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
+            ])),
+            _ => {
+                let _ = store_tx
+                    .send(Envelope::Replicate {
+                        command: command.clone(),
+                    })
+                    .await;
+                None
+            }
+        };
+        reply
+    } else {
+        println!(
+            "[process_replica_message] could not decode command from input: {:?}",
+            input
+        );
+        None
     }
 }
 
