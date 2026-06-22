@@ -1768,6 +1768,9 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         buffer.fill(0u8);
         let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
         let (mut inputs, _) = parse_all_resp(&buffer).unwrap();
+        for (i, x) in inputs.iter().enumerate() {
+            println!("X {} : {:?}", i, x);
+        }
         for (i, (input, _)) in inputs.iter().enumerate() {
             if let RespElement::File(_) = input {
                 println!("Got RDB file");
