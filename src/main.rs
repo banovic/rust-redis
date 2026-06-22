@@ -740,7 +740,7 @@ impl Store {
             Command::Wait {
                 numreplicas,
                 timeout,
-            } => TryExecuteResult::Done(Reply::Integer(0)),
+            } => TryExecuteResult::Done(Reply::Integer(self.replicas.len() as i64)),
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
