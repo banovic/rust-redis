@@ -1785,6 +1785,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
 
     // FULLRESYNC respons and RDB file, 3rd message can be also in these inputs
     let mut inputs_queue = VecDeque::from(read_inputs_from_stream(&mut stream).await.unwrap());
+    println!("Handshake phase 2 start, input queue: {:?}", inputs_queue);
 
     // FULLRESYNC
     inputs_queue.pop_front();
@@ -1793,10 +1794,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     inputs_queue.pop_front();
 
     println!("Handshake phase 2 complete, starting listening and metering on this connection");
-    println!(
-        "Handshake phase 2 complete, input queue: {:?}",
-        inputs_queue
-    );
+    println!("Handshake phase 2 finish, input queue: {:?}", inputs_queue);
 
     // Start counting ACK bytes here:
     let mut ack_bytes = 0;
