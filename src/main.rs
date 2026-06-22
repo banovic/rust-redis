@@ -737,6 +737,10 @@ impl Store {
             //     Reply::BulkString("ACK".as_bytes().to_vec()),
             //     Reply::BulkString("0".as_bytes().to_vec()),
             // ])),
+            Command::Wait {
+                numreplicas,
+                timeout,
+            } => TryExecuteResult::Done(Reply::Integer(0)),
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
@@ -1088,6 +1092,10 @@ enum Command {
         offset: i64,
     },
     ReplconfAck,
+    Wait {
+        numreplicas: u64,
+        timeout: u64,
+    },
 }
 
 impl Command {
@@ -1295,6 +1303,16 @@ impl Command {
                 Some(Command::Psync {
                     replication_id,
                     offset,
+                })
+            }
+            b"WAIT" => {
+                let numreplicas_field = bs.pop_front().unwrap();
+                let timeout_field = bs.pop_front().unwrap();
+                let (numreplicas, _) = integer::<u64>().parse(&numreplicas_field).unwrap();
+                let (timeout, _) = integer::<u64>().parse(&timeout_field).unwrap();
+                Some(Command::Wait {
+                    numreplicas,
+                    timeout,
                 })
             }
             _ => None,
