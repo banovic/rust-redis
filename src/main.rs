@@ -1752,7 +1752,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     // Handshake: 1) PING - PONG
     let reply = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
     let _ = write_reply(&mut stream, &reply).await;
-    let foo = read_inputs_from_stream(&mut stream).await;
+    let _ = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 2) REPLCONF
     let reply = Reply::Array(vec![
@@ -1761,7 +1761,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         Reply::BulkString(format!("{}", port).as_bytes().to_vec()),
     ]);
     let _ = write_reply(&mut stream, &reply).await;
-    let foo = read_inputs_from_stream(&mut stream).await;
+    let _ = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 3) REPLCONF
     let reply = Reply::Array(vec![
@@ -1770,7 +1770,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         Reply::BulkString("psync2".as_bytes().to_vec()),
     ]);
     let _ = write_reply(&mut stream, &reply).await;
-    let foo = read_inputs_from_stream(&mut stream).await;
+    let _ = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 4) PSYNC
     let reply = Reply::Array(vec![
@@ -1779,11 +1779,9 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         Reply::BulkString("-1".as_bytes().to_vec()),
     ]);
     let _ = write_reply(&mut stream, &reply).await;
-    let _ = read_inputs_from_stream(&mut stream).await;
+    //let _ = read_inputs_from_stream(&mut stream).await;
 
-    println!("Handshake phase 1 complete");
-
-    // FULLRESYNC respons and RDB file, 3rd message can be also in these inputs
+    // FULLRESYNC response tO PSYNC and RDB file, 3rd message can be also in these inputs
     let mut inputs_queue = VecDeque::from(read_inputs_from_stream(&mut stream).await.unwrap());
     println!("Handshake phase 2 start, input queue: {:?}", inputs_queue);
 
