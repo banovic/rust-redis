@@ -1775,6 +1775,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                 if inputs.len() > 2 {
                     initial_input_parts = inputs.split_off(i);
                     println!("INPUTS: {:?}", inputs);
+                    println!("BUFFER: {:?}", buffer);
                 }
                 break;
             }
