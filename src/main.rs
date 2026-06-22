@@ -90,8 +90,8 @@ impl RespElement {
     fn size(&self) -> usize {
         match self {
             RespElement::Array(a) => a.iter().map(|r| r.size()).sum(),
-            RespElement::File(f) => f.len(),
-            RespElement::String(s) => s.len(),
+            RespElement::File(f) => f.len() + 3,
+            RespElement::String(s) => s.len() + 5,
         }
     }
 }
@@ -833,7 +833,7 @@ fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, 
 //     }
 // }
 
-fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
     let ((_, s, _), rest) = and!(
         byte(b'+'),
         take_until(&[b'\r', b'\n']),
@@ -841,40 +841,54 @@ fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElemen
     )
     .parse(input)?;
 
-    Ok((RespElement::String(s.to_vec()), rest))
+    Ok((
+        (RespElement::String(s.to_vec()), input.len() - rest.len()),
+        rest,
+    ))
 }
 
-fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
     let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
     let ((_, s, _), rest) =
         and!(tag(&[b'\r', b'\n']), take(l), tag(&[b'\r', b'\n'])).parse(rest)?;
 
-    Ok((RespElement::String(s.to_vec()), rest))
+    Ok((
+        (RespElement::String(s.to_vec()), input.len() - rest.len()),
+        rest,
+    ))
 }
 
-fn parse_rdb_file<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+fn parse_rdb_file<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
     let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
     let ((_, s), rest) = and!(tag(&[b'\r', b'\n']), take(l)).parse(rest)?;
 
-    Ok((RespElement::File(s.to_vec()), rest))
+    Ok((
+        (RespElement::File(s.to_vec()), input.len() - rest.len()),
+        rest,
+    ))
 }
 
-fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
     let ((_, l, _), rest) =
         and!(byte(b'*'), integer::<usize>(), tag(&[b'\r', b'\n'])).parse(input)?;
 
-    let mut elements: Vec<RespElement> = Vec::new();
+    let mut elements = Vec::new();
     let mut new_rest = rest;
+    let mut len = 0;
     for _ in 0..l {
-        let (el, rest) = parse_input_resp(new_rest)?;
+        let ((el, l), rest) = parse_input_resp(new_rest)?;
         new_rest = rest;
         elements.push(el);
+        len += l;
     }
 
-    Ok((RespElement::Array(elements), new_rest))
+    Ok((
+        (RespElement::Array(elements), input.len() - new_rest.len()),
+        new_rest,
+    ))
 }
 
-fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> {
+fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
     match input[0] {
         // Rdb file is encoded as same as bulk string - *but* it is missing ending 'r\\n' bytes (2 bytes).
         // First match greedy for bulk string, and fallback to rdb file:
@@ -893,7 +907,7 @@ fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, RespElement> 
     }
 }
 
-fn parse_all_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<RespElement>> {
+fn parse_all_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<(RespElement, usize)>> {
     let mut arrays = Vec::new();
     let mut next_input = input;
     loop {
@@ -1547,9 +1561,10 @@ async fn handle_client(
                         // Multiple commands can come together
                         //let (input, _) = parse_input_resp(&buffer).unwrap();
                         let (inputs, _) = parse_all_resp(&buffer).unwrap();
-                        let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
+                        //let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
-                        for command in commands {
+                        for (input, len) in inputs {
+                            let command = Command::from_bytes(input.to_words()).unwrap();
                             match (&command, &mut queue) {
                                 (Command::ReplconfListeningPort { port: _ }, _) => {
                                     let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
@@ -1685,13 +1700,6 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 }
-fn print_buffer(b: &[u8], n: usize) {
-    let s = String::from_utf8(b[..n].to_vec());
-    match s {
-        Ok(sb) => println!("{}", sb),
-        Err(e) => println!("ERROR WHILE PRINTING BUFFER: {:?}", e),
-    };
-}
 
 // This is run when server is replica
 async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender<Envelope>) {
@@ -1760,7 +1768,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
         buffer.fill(0u8);
         let _ = stream.read(&mut buffer).await.unwrap(); // +FULLRESYNC .... && RDB File
         let (mut inputs, _) = parse_all_resp(&buffer).unwrap();
-        for (i, input) in inputs.iter().enumerate() {
+        for (i, (input, _)) in inputs.iter().enumerate() {
             if let RespElement::File(_) = input {
                 println!("Got RDB file");
                 handshake_complete = true;
@@ -1798,7 +1806,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
 
                         // let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
-                        for input in inputs {
+                        for (input, len) in inputs {
                             let command = Command::from_bytes(input.to_words()).unwrap();
                             println!("Replica processing command: {:?}", command);
 
@@ -1836,7 +1844,7 @@ async fn run_replica(addr: String, port: u16, mut store_process_tx: mpsc::Sender
                                     let _ = store_process_tx.send(Envelope::Replicate{ command: command.clone() }).await;
                                 }
                             };
-                            ack_bytes += input.size();
+                            ack_bytes += len;
                         }
                         buffer.fill(0u8);
                     }
