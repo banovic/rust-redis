@@ -1719,6 +1719,17 @@ async fn process_replica_message(
                 Reply::BulkString("ACK".as_bytes().to_vec()),
                 Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
             ])),
+            Command::Get { key: _ } => {
+                let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
+                let _ = store_tx
+                    .send(Envelope::FromMaster {
+                        command,
+                        reply_channel: rsp_tx,
+                    })
+                    .await;
+                let reply = rsp_rx.await.unwrap();
+                Some(reply)
+            }
             _ => {
                 let _ = store_tx
                     .send(Envelope::Replicate {
@@ -1856,77 +1867,61 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     //let mut ack_bytes = 0;
 
     loop {
-        select! {
-                    read_inputs = read_inputs_from_stream(&mut stream) => {
-                        match read_inputs {
-                            None => {
-                                println!("Master disconnected");
-                                break;
-                            }
-                            Some(inputs) => {
-                                // let (new_inputs, _) = parse_all_resp(&buffer).unwrap();
-                                // let is_initial_input_parts_empty = !initial_input_parts.is_empty();
-                                // let inputs = if is_initial_input_parts_empty {
-                                //     let x = initial_input_parts.clone().into_iter().chain(new_inputs.into_iter()).collect();
-                                //     initial_input_parts.clear();
-                                //     x
-                                // } else {
-                                //     new_inputs
-                                // };
-
-                                // let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
-        // call fn process_replica_message() with initial_input_parts
-
-                                for (input, len) in inputs {
-                                    match process_replica_message(&mut store_tx, input, ack_bytes).await {
-                                        Some(reply) => {
-                                            let _ = write_reply(&mut stream, &reply).await;
-                                        },
-                                        _ => {}
-                                    };
-                                    // let command = Command::from_bytes(input.to_words()).unwrap();
-                                    // println!("Replica processing command: {:?}", command);
-
-                                    // match command {
-                                    //     Command::ReplconfAck => {
-                                    //         let reply = Reply::Array(vec![
-                                    //             Reply::BulkString("REPLCONF".as_bytes().to_vec()),
-                                    //             Reply::BulkString("ACK".as_bytes().to_vec()),
-                                    //             Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
-                                    //         ]);
-                                    //         // let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
-                                    //         // let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
-                                    //         // let reply = rsp_rx.await;
-                                    //         // println!("Received from master: {:?}", reply);
-                                    //         // match reply {
-                                    //         //     Ok(reply) => {
-                                    //                 let _ = write_reply(&mut stream, &reply).await;
-                                    //                 //let _ = stream.flush().await;
-                                    //                 buffer.fill(0u8);
-                                    //             // }
-                                    //             // Err(e) => {
-                                    //             //     println!("Error from master: {:?}", e);
-                                    //             // }
-                                    //         //}
-                                    //     }
-                                    //     // Command::Ping { ref message } => {
-                                    //     //     let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
-                                    //     //     let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
-                                    //     //     let reply = rsp_rx.await.unwrap();
-                                    //     //     println!("PONG Received from master: {:?}", reply);
-                                    //     // //   let _ = write_reply(&mut stream, &reply).await;
-                                    //     // //   buffer.fill(0u8);
-                                    //     // }
-                                    //     _ => {
-                                    //         let _ = store_process_tx.send(Envelope::Replicate{ command: command.clone() }).await;
-                                    //     }
-                                    //};
-                                    ack_bytes += len;
-                                }
-                            }
+        let read_inputs = read_inputs_from_stream(&mut stream).await;
+        match read_inputs {
+            None => {
+                println!("Master disconnected");
+                break;
+            }
+            Some(inputs) => {
+                for (input, len) in inputs {
+                    match process_replica_message(&mut store_tx, input, ack_bytes).await {
+                        Some(reply) => {
+                            let _ = write_reply(&mut stream, &reply).await;
                         }
-                    }
+                        _ => {}
+                    };
+                    // let command = Command::from_bytes(input.to_words()).unwrap();
+                    // println!("Replica processing command: {:?}", command);
+
+                    // match command {
+                    //     Command::ReplconfAck => {
+                    //         let reply = Reply::Array(vec![
+                    //             Reply::BulkString("REPLCONF".as_bytes().to_vec()),
+                    //             Reply::BulkString("ACK".as_bytes().to_vec()),
+                    //             Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
+                    //         ]);
+                    //         // let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
+                    //         // let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
+                    //         // let reply = rsp_rx.await;
+                    //         // println!("Received from master: {:?}", reply);
+                    //         // match reply {
+                    //         //     Ok(reply) => {
+                    //                 let _ = write_reply(&mut stream, &reply).await;
+                    //                 //let _ = stream.flush().await;
+                    //                 buffer.fill(0u8);
+                    //             // }
+                    //             // Err(e) => {
+                    //             //     println!("Error from master: {:?}", e);
+                    //             // }
+                    //         //}
+                    //     }
+                    //     // Command::Ping { ref message } => {
+                    //     //     let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
+                    //     //     let _ = store_process_tx.send(Envelope::FromMaster { command, reply_channel: rsp_tx }).await;
+                    //     //     let reply = rsp_rx.await.unwrap();
+                    //     //     println!("PONG Received from master: {:?}", reply);
+                    //     // //   let _ = write_reply(&mut stream, &reply).await;
+                    //     // //   buffer.fill(0u8);
+                    //     // }
+                    //     _ => {
+                    //         let _ = store_process_tx.send(Envelope::Replicate{ command: command.clone() }).await;
+                    //     }
+                    //};
+                    ack_bytes += len;
                 }
+            }
+        }
     }
 }
 
