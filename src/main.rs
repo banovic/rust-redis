@@ -1793,6 +1793,10 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     inputs_queue.pop_front();
 
     println!("Handshake phase 2 complete, starting listening and metering on this connection");
+    println!(
+        "Handshake phase 2 complete, input queue: {:?}",
+        inputs_queue
+    );
 
     // Start counting ACK bytes here:
     let mut ack_bytes = 0;
