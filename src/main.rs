@@ -1730,13 +1730,19 @@ async fn process_replica_message(
 async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(RespElement, usize)>> {
     let mut buffer = [0; 1024];
     let n = stream.read(&mut buffer).await.unwrap(); // +PONG
-    if n == 0 {
+    let read_inputs = if n == 0 {
         // Client disconected
+        println!("[read] None");
         None
     } else {
         let (inputs, _) = parse_all_resp(&buffer).unwrap();
+        for (resp, len) in &inputs {
+            println!("[read][{}] {:?}", len, resp);
+        }
         Some(inputs)
-    }
+    };
+
+    read_inputs
 }
 
 // This is run when server is replica
@@ -1745,8 +1751,8 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
 
     // Handshake: 1) PING - PONG
     let reply = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
-    write_reply(&mut stream, &reply).await;
-    let _ = read_inputs_from_stream(&mut stream).await;
+    let _ = write_reply(&mut stream, &reply).await;
+    let foo = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 2) REPLCONF
     let reply = Reply::Array(vec![
@@ -1754,8 +1760,8 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         Reply::BulkString("listening-port".as_bytes().to_vec()),
         Reply::BulkString(format!("{}", port).as_bytes().to_vec()),
     ]);
-    write_reply(&mut stream, &reply).await;
-    let _ = read_inputs_from_stream(&mut stream).await;
+    let _ = write_reply(&mut stream, &reply).await;
+    let foo = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 3) REPLCONF
     let reply = Reply::Array(vec![
@@ -1763,8 +1769,8 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         Reply::BulkString("capa".as_bytes().to_vec()),
         Reply::BulkString("psync2".as_bytes().to_vec()),
     ]);
-    write_reply(&mut stream, &reply).await;
-    let _ = read_inputs_from_stream(&mut stream).await;
+    let _ = write_reply(&mut stream, &reply).await;
+    let foo = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 4) PSYNC
     let reply = Reply::Array(vec![
@@ -1772,7 +1778,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         Reply::BulkString("?".as_bytes().to_vec()),
         Reply::BulkString("-1".as_bytes().to_vec()),
     ]);
-    write_reply(&mut stream, &reply).await;
+    let _ = write_reply(&mut stream, &reply).await;
     let _ = read_inputs_from_stream(&mut stream).await;
 
     println!("Handshake phase 1 complete");
