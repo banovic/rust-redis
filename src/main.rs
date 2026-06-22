@@ -1793,7 +1793,15 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     //let _ = read_inputs_from_stream(&mut stream).await;
 
     // FULLRESYNC response tO PSYNC and RDB file, 3rd message can be also in these inputs
-    let mut inputs_queue = VecDeque::from(read_inputs_from_stream(&mut stream).await.unwrap());
+    let mut inputs_queue = VecDeque::new();
+    loop {
+        let new_inputs = read_inputs_from_stream(&mut stream).await.unwrap();
+        inputs_queue.append(&mut VecDeque::from(new_inputs));
+        if inputs_queue.len() >= 2 {
+            break;
+        }
+    }
+
     println!("Handshake phase 2 start, input queue: {:?}", inputs_queue);
 
     // FULLRESYNC
