@@ -1800,7 +1800,12 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     // Optional other inputs:
     if let Some((input, bs)) = inputs_queue.pop_front() {
         ack_bytes += bs;
-        process_replica_message(&mut store_tx, input, ack_bytes).await;
+        match process_replica_message(&mut store_tx, input, ack_bytes).await {
+            Some(reply) => {
+                let _ = write_reply(&mut stream, &reply).await;
+            }
+            _ => {}
+        };
     }
 
     // let mut handshake_complete = false;
