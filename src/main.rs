@@ -124,6 +124,7 @@ enum TryExecuteResult {
     Done(Reply),
     BlockingXread(WaiterId, Vec<Key>, Vec<(u64, u64)>),
     BlockingBlpop(WaiterId, Vec<Key>),
+    WaitingForReplicas(WaiterId, u64),
 }
 #[derive(Debug)]
 struct Store {
@@ -134,6 +135,7 @@ struct Store {
     watched_keys: HashMap<Key, HashSet<usize>>,
     stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>, Vec<(u64, u64)>)>,
     list_blpop_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>)>,
+    wait_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, u64)>,
 }
 
 impl Store {
@@ -146,6 +148,7 @@ impl Store {
             watched_keys: HashMap::new(),
             stream_xread_waiters: HashMap::new(),
             list_blpop_waiters: HashMap::new(),
+            wait_waiters: HashMap::new(),
         }
     }
 
@@ -732,15 +735,18 @@ impl Store {
                 TryExecuteResult::Done(result)
             }
 
-            // Command::ReplconfAck => TryExecuteResult::Done(Reply::Array(vec![
-            //     Reply::BulkString("REPLCONF".as_bytes().to_vec()),
-            //     Reply::BulkString("ACK".as_bytes().to_vec()),
-            //     Reply::BulkString("0".as_bytes().to_vec()),
-            // ])),
             Command::Wait {
                 numreplicas,
-                timeout,
-            } => TryExecuteResult::Done(Reply::Integer(self.replicas.len() as i64)),
+                timeout: _,
+            } => {
+                if self.replicas.len() as u64 >= numreplicas {
+                    TryExecuteResult::Done(Reply::Integer(self.replicas.len() as i64))
+                } else {
+                    self.waiter_id += 1;
+                    TryExecuteResult::WaitingForReplicas(self.waiter_id, numreplicas)
+                }
+            }
+
             _ => TryExecuteResult::Done(Reply::Null),
         }
     }
@@ -1443,6 +1449,9 @@ enum Envelope {
     TimeoutBlpop {
         waiter_id: WaiterId,
     },
+    TimeoutWait {
+        waiter_id: WaiterId,
+    },
     AddReplica {
         client_id: usize,
         tx: mpsc::Sender<Command>,
@@ -1474,8 +1483,11 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
 
                 match store.try_execute(client_id, command) {
                     TryExecuteResult::Done(reply) => {
+                        // Answer to client connected to master
                         let _ = reply_channel.send(reply);
+                        // Update all connected replicas
                         if let Some(replication_command) = replication_command {
+                            // Set pending writes flag:
                             for (client_id, tx) in &store.replicas {
                                 println!(
                                     "[client_id = {}] Replicating command: {:?}",
@@ -1483,6 +1495,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                                 );
                                 let _ = tx.send(replication_command.clone()).await;
                             }
+                            // Clear pending writes flag:
                         }
                     }
                     TryExecuteResult::BlockingXread(waiter_id, keys, ids) => {
@@ -1509,6 +1522,18 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                             let _ = tx2.send(Envelope::TimeoutBlpop { waiter_id }).await;
                         });
                     }
+                    TryExecuteResult::WaitingForReplicas(waiter_id, numreplicas) => {
+                        println!("WAIT: Timeout: {:?}", timeout);
+                        store
+                            .wait_waiters
+                            .insert(waiter_id, (reply_channel, numreplicas));
+                        let duration = Duration::from_millis(timeout.unwrap());
+                        let tx2 = tx.clone();
+                        tokio::spawn(async move {
+                            sleep(duration).await;
+                            let _ = tx2.send(Envelope::TimeoutWait { waiter_id }).await;
+                        });
+                    }
                 }
             }
             Envelope::TimeoutXread { waiter_id } => {
@@ -1523,8 +1548,18 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     let _ = reply_channel.send(Reply::NullArray);
                 }
             }
+            Envelope::TimeoutWait { waiter_id } => {
+                // Deregister interest if there's any, and remove interestent
+                if let Some((reply_channel, numreplicas)) = store.wait_waiters.remove(&waiter_id) {
+                    let _ = reply_channel.send(Reply::Integer(numreplicas as i64));
+                }
+            }
             Envelope::AddReplica { client_id, tx } => {
                 store.replicas.insert(client_id, tx);
+                // Update waiters? WAIT
+                for (_, (_, numreplicas)) in store.wait_waiters.iter_mut() {
+                    *numreplicas += 1;
+                }
             }
             // This is command execution on replica
             Envelope::Replicate { command } => {
@@ -1598,10 +1633,11 @@ async fn handle_client(
                                     },
                                     _,
                                 ) => {
-                                    let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
                                     // This client is replica
                                     let _ = write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
                                     let _ = write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
+                                    // Start counting bytes sent to this channel now:
+                                    let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
                                 },
                                 // Just echo
                                 (Command::Echo { message }, _) => {
