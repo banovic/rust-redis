@@ -1744,10 +1744,10 @@ async fn handle_client(
             replicate_command = rx.recv() => {
                 // Command received from master, encode it and send it to client / replica
                 // (this is all happening on master, this is process inside master / server)
-                println!("Replica received command: {:?}", replicate_command);
+                println!("Replica (master process, client connection handler) received command: {:?}", replicate_command);
                 if let Some((command, reply_tx)) = replicate_command {
                     if let Some(encoded_command) = command.encode_to_bytes() {
-                        println!("Sending ecnoded command: {:?}", encoded_command);
+                        println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
                         let _ = stream.write_all(&encoded_command).await;
                         let _ = stream.flush().await;
                         if let Some(reply_back_to_master_tx) = reply_tx {
