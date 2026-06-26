@@ -1389,6 +1389,7 @@ impl Command {
                 ex: _,
                 px: _,
             } => true,
+            Command::ReplconfGetAck => true,
             _ => false,
         }
     }
@@ -1773,7 +1774,7 @@ async fn execute_command(
     // store process must send reply in all cases. how to ensure / enforce this?
     let reply = match reply_ch_receiver.await {
         Ok(r) => r,
-        Err(_) => panic!("Something wrong with processing command"),
+        Err(e) => panic!("Something wrong with processing command: {:?}", e),
     };
 
     reply
