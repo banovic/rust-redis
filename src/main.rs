@@ -1444,6 +1444,13 @@ impl Command {
 
                 Some(out)
             }
+            Command::ReplconfGetAck => {
+                write_bytes(&mut out, &[b'*', b'3', b'\r', b'\n']);
+                write_bytes(&mut out, &"$8\r\nREPLCONF\r\n".as_bytes().to_vec());
+                write_bytes(&mut out, &"$6\r\nGETACK\r\n".as_bytes().to_vec());
+                write_bytes(&mut out, &"$1\r\n*\r\n".as_bytes().to_vec());
+                Some(out)
+            }
             _ => None,
         }
     }
