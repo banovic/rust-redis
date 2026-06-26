@@ -1587,9 +1587,25 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     let _ = reply_channel.send(Reply::Integer(available as i64));
                 }
             }
-            Envelope::AddReplica { client_id, tx } => {
-                store.replicas.insert(client_id, tx);
+            Envelope::AddReplica {
+                client_id,
+                tx: replica_tx,
+            } => {
+                store.replicas.insert(client_id, replica_tx);
                 // Update waiters? WAIT
+                let (tx, rx) = oneshot::channel::<Reply>();
+                let _ = &store
+                    .replicas
+                    .get(&client_id)
+                    .unwrap()
+                    .send((Command::ReplconfGetAck, Some(tx)))
+                    .await;
+                let reply = rx.await.unwrap();
+                println!(
+                    "TryExecuteResult::AddReplica: (GETACK for newly connected replica) received reply: {:?}",
+                    reply
+                );
+
                 for (_, (_, _, available)) in store.wait_waiters.iter_mut() {
                     *available += 1;
                 }
@@ -1749,9 +1765,9 @@ async fn handle_client(
                     if let Some(encoded_command) = command.encode_to_bytes() {
                         println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
                         let x1 = stream.write_all(&encoded_command).await;
-                        println!("Result x1: {:?}", x1);
+                        //println!("Result x1: {:?}", x1);
                         let x2 = stream.flush().await;
-                        println!("Result x2: {:?}", x2);
+                        //println!("Result x2: {:?}", x2);
                         if let Some(reply_back_to_master_tx) = reply_tx {
                             waiters_queue.push_back(reply_back_to_master_tx);
                             println!("Replica client will notify master (same process), queue: {:?}", waiters_queue);
