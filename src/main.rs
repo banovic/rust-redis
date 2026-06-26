@@ -1752,6 +1752,7 @@ async fn handle_client(
                         let _ = stream.flush().await;
                         if let Some(reply_back_to_master_tx) = reply_tx {
                             waiters_queue.push_back(reply_back_to_master_tx);
+                            println!("Replica client will notify master (same process), queue: {:?}", waiters_queue);
                         }
                     }
                 }
@@ -1948,6 +1949,10 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
                 for (input, len) in inputs {
                     match process_replica_message(&mut store_tx, input, ack_bytes).await {
                         Some(reply) => {
+                            println!(
+                                "Replica (its process), has response for master: {:?}",
+                                reply
+                            );
                             let _ = write_reply(&mut stream, &reply).await;
                         }
                         _ => {}
