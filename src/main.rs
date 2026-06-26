@@ -1748,8 +1748,10 @@ async fn handle_client(
                 if let Some((command, reply_tx)) = replicate_command {
                     if let Some(encoded_command) = command.encode_to_bytes() {
                         println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
-                        let _ = stream.write_all(&encoded_command).await;
-                        let _ = stream.flush().await;
+                        let x1 = stream.write_all(&encoded_command).await;
+                        println!("Result x1: {:?}", x1);
+                        let x2 = stream.flush().await;
+                        println!("Result x2: {:?}", x2);
                         if let Some(reply_back_to_master_tx) = reply_tx {
                             waiters_queue.push_back(reply_back_to_master_tx);
                             println!("Replica client will notify master (same process), queue: {:?}", waiters_queue);
