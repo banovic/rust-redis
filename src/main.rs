@@ -124,18 +124,25 @@ enum TryExecuteResult {
     Done(Reply),
     BlockingXread(WaiterId, Vec<Key>, Vec<(u64, u64)>),
     BlockingBlpop(WaiterId, Vec<Key>),
-    WaitingForReplicas(WaiterId, u64),
+    WaitCommand(WaiterId, u64, u64),
 }
 #[derive(Debug)]
 struct Store {
     is_replica: bool,
-    replicas: HashMap<usize, mpsc::Sender<Command>>,
+    // Since replicas are also clients of master (ie. sub-process inside same master process),
+    // key is client id, and value is channel to that client/replica sub-process; channel works
+    // with pair: command for replica and optional channel to send result back to master process.
+    replicas: HashMap<usize, mpsc::Sender<(Command, Option<oneshot::Sender<Reply>>)>>,
     data: HashMap<Key, Value>,
     waiter_id: WaiterId,
     watched_keys: HashMap<Key, HashSet<usize>>,
     stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>, Vec<(u64, u64)>)>,
     list_blpop_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>)>,
-    wait_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, u64)>,
+    // Clients waiting for WAIT command to complete, key is waiter id and value is tuple:
+    // channel to respond to client (reply), num of replicas client wanted and num of replicas
+    // currently available (this is increased by one if replica is connected afterwards and
+    // receives whole rdb file)
+    wait_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, u64, u64)>,
 }
 
 impl Store {
@@ -737,14 +744,10 @@ impl Store {
 
             Command::Wait {
                 numreplicas,
-                timeout: _,
+                timeout,
             } => {
-                if self.replicas.len() as u64 >= numreplicas {
-                    TryExecuteResult::Done(Reply::Integer(self.replicas.len() as i64))
-                } else {
-                    self.waiter_id += 1;
-                    TryExecuteResult::WaitingForReplicas(self.waiter_id, numreplicas)
-                }
+                self.waiter_id += 1;
+                TryExecuteResult::WaitCommand(self.waiter_id, numreplicas, timeout)
             }
 
             _ => TryExecuteResult::Done(Reply::Null),
@@ -1097,7 +1100,10 @@ enum Command {
         replication_id: String,
         offset: i64,
     },
-    ReplconfAck,
+    ReplconfGetAck,
+    ReplconfAck {
+        ack_bytes: u64,
+    },
     Wait {
         numreplicas: u64,
         timeout: u64,
@@ -1294,10 +1300,15 @@ impl Command {
                     b"GETACK" => {
                         let star = bs.pop_front().unwrap();
                         if star.len() == 1 && star[0] == b'*' {
-                            Some(Command::ReplconfAck)
+                            Some(Command::ReplconfGetAck)
                         } else {
                             None
                         }
+                    }
+                    b"ACK" => {
+                        let ack_bytes_field = bs.pop_front().unwrap();
+                        let (ack_bytes, _) = integer::<u64>().parse(&ack_bytes_field).unwrap();
+                        Some(Command::ReplconfAck { ack_bytes })
                     }
                     _ => panic!("Unknown REPLCONF shape"),
                 }
@@ -1449,12 +1460,9 @@ enum Envelope {
     TimeoutBlpop {
         waiter_id: WaiterId,
     },
-    TimeoutWait {
-        waiter_id: WaiterId,
-    },
     AddReplica {
         client_id: usize,
-        tx: mpsc::Sender<Command>,
+        tx: mpsc::Sender<(Command, Option<oneshot::Sender<Reply>>)>,
     },
     Replicate {
         command: Command,
@@ -1462,6 +1470,9 @@ enum Envelope {
     FromMaster {
         command: Command,
         reply_channel: oneshot::Sender<Reply>,
+    },
+    WaitCommandTimeout {
+        waiter_id: WaiterId,
     },
 }
 
@@ -1493,7 +1504,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                                     "[client_id = {}] Replicating command: {:?}",
                                     client_id, replication_command
                                 );
-                                let _ = tx.send(replication_command.clone()).await;
+                                let _ = tx.send((replication_command.clone(), None)).await;
                             }
                             // Clear pending writes flag:
                         }
@@ -1522,17 +1533,29 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                             let _ = tx2.send(Envelope::TimeoutBlpop { waiter_id }).await;
                         });
                     }
-                    TryExecuteResult::WaitingForReplicas(waiter_id, numreplicas) => {
-                        println!("WAIT: Timeout: {:?}", timeout);
-                        store
-                            .wait_waiters
-                            .insert(waiter_id, (reply_channel, numreplicas));
-                        let duration = Duration::from_millis(timeout.unwrap());
-                        let tx2 = tx.clone();
-                        tokio::spawn(async move {
-                            sleep(duration).await;
-                            let _ = tx2.send(Envelope::TimeoutWait { waiter_id }).await;
-                        });
+                    TryExecuteResult::WaitCommand(waiter_id, numreplicas, timeout) => {
+                        let mut available = 0_u64;
+                        for (client_id, replica_tx) in &store.replicas {
+                            let (tx, rx) = oneshot::channel::<Reply>();
+                            // This sends command to the client (running in this process, client is replica)
+                            let _ = replica_tx.send((Command::ReplconfGetAck, Some(tx))).await;
+                            let reply = rx.await.unwrap();
+                            println!("TryExecuteResult::WaitCommand: received reply: {:?}", reply);
+                            available += 1;
+                        }
+                        if available >= numreplicas {
+                            let _ = reply_channel.send(Reply::Integer(available as i64));
+                        } else {
+                            store
+                                .wait_waiters
+                                .insert(waiter_id, (reply_channel, numreplicas as u64, available));
+                            let duration = Duration::from_millis(timeout);
+                            let tx2 = tx.clone();
+                            tokio::spawn(async move {
+                                sleep(duration).await;
+                                let _ = tx2.send(Envelope::WaitCommandTimeout { waiter_id }).await;
+                            });
+                        }
                     }
                 }
             }
@@ -1548,17 +1571,19 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     let _ = reply_channel.send(Reply::NullArray);
                 }
             }
-            Envelope::TimeoutWait { waiter_id } => {
+            Envelope::WaitCommandTimeout { waiter_id } => {
                 // Deregister interest if there's any, and remove interestent
-                if let Some((reply_channel, numreplicas)) = store.wait_waiters.remove(&waiter_id) {
-                    let _ = reply_channel.send(Reply::Integer(numreplicas as i64));
+                if let Some((reply_channel, numreplicas, available)) =
+                    store.wait_waiters.remove(&waiter_id)
+                {
+                    let _ = reply_channel.send(Reply::Integer(available as i64));
                 }
             }
             Envelope::AddReplica { client_id, tx } => {
                 store.replicas.insert(client_id, tx);
                 // Update waiters? WAIT
-                for (_, (_, numreplicas)) in store.wait_waiters.iter_mut() {
-                    *numreplicas += 1;
+                for (_, (_, _, available)) in store.wait_waiters.iter_mut() {
+                    *available += 1;
                 }
             }
             // This is command execution on replica
@@ -1597,7 +1622,10 @@ async fn handle_client(
     let mut buffer = [0u8; 1024];
 
     // Channel to this client, so master can send commands for replication
-    let (tx, mut rx) = mpsc::channel::<Command>(1024);
+    let (tx, mut rx) = mpsc::channel::<(Command, Option<oneshot::Sender<Reply>>)>(1024);
+
+    // TODO - this should be exactly 1 channel per call
+    let mut waiters_queue: VecDeque<oneshot::Sender<Reply>> = VecDeque::new();
 
     loop {
         select! {
@@ -1639,6 +1667,11 @@ async fn handle_client(
                                     // Start counting bytes sent to this channel now:
                                     let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
                                 },
+                                (Command::ReplconfAck { ack_bytes }, _) => {
+                                    while let Some(reply_back_to_master_tx) = waiters_queue.pop_front() {
+                                        let _ = reply_back_to_master_tx.send(Reply::Integer(*ack_bytes as i64));
+                                    }
+                                }
                                 // Just echo
                                 (Command::Echo { message }, _) => {
                                     let _ = write_reply(&mut stream, &Reply::BulkString(message.to_vec())).await;
@@ -1704,11 +1737,14 @@ async fn handle_client(
                 // Command received from master, encode it and send it to client / replica
                 // (this is all happening on master, this is process inside master / server)
                 println!("Replica received command: {:?}", replicate_command);
-                if let Some(command) = replicate_command {
+                if let Some((command, reply_tx)) = replicate_command {
                     if let Some(encoded_command) = command.encode_to_bytes() {
                         println!("Sending ecnoded command: {:?}", encoded_command);
                         let _ = stream.write_all(&encoded_command).await;
                         let _ = stream.flush().await;
+                        if let Some(reply_back_to_master_tx) = reply_tx {
+                            waiters_queue.push_back(reply_back_to_master_tx);
+                        }
                     }
                 }
             }
@@ -1768,7 +1804,7 @@ async fn process_replica_message(
         //     input, command
         // );
         let reply = match command {
-            Command::ReplconfAck => Some(Reply::Array(vec![
+            Command::ReplconfGetAck => Some(Reply::Array(vec![
                 Reply::BulkString("REPLCONF".as_bytes().to_vec()),
                 Reply::BulkString("ACK".as_bytes().to_vec()),
                 Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
