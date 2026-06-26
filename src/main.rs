@@ -1808,10 +1808,10 @@ async fn process_replica_message(
 ) -> Option<Reply> {
     println!("Replica processing input: {:?}", input);
     if let Some(command) = Command::from_bytes(input.to_words()) {
-        // println!(
-        //     "[process_replica_message] input: {:?}, command: {:?}",
-        //     input, command
-        // );
+        println!(
+            "[process_replica_message] input: {:?}, command: {:?}",
+            input, command
+        );
         let reply = match command {
             Command::ReplconfGetAck => Some(Reply::Array(vec![
                 Reply::BulkString("REPLCONF".as_bytes().to_vec()),
