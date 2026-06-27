@@ -1593,6 +1593,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             } => {
                 store.replicas.insert(client_id, replica_tx);
                 // Update waiters? WAIT
+                //let notified_for_this_replica = store.wait_waiters.contains_key(k)
                 let (tx, rx) = oneshot::channel::<Reply>();
                 let _ = &store
                     .replicas
@@ -1606,8 +1607,20 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                     reply
                 );
 
-                for (_, (_, _, available)) in store.wait_waiters.iter_mut() {
+                let mut waiters_for_removal = Vec::new();
+
+                for (waiter_id, (_, numreplicas, available)) in store.wait_waiters.iter_mut() {
                     *available += 1;
+                    if *available >= *numreplicas {
+                        waiters_for_removal.push(*waiter_id);
+                    }
+                }
+
+                for waiter_id in waiters_for_removal {
+                    let (replica_client_tx, numreplicas, available) =
+                        store.wait_waiters.remove(&waiter_id).unwrap();
+
+                    let _ = replica_client_tx.send(Reply::Integer(available as i64));
                 }
             }
             // This is command execution on replica
