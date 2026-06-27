@@ -1593,19 +1593,19 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             } => {
                 store.replicas.insert(client_id, replica_tx);
                 // Update waiters? WAIT
-                //let notified_for_this_replica = store.wait_waiters.contains_key(k)
-                let (tx, rx) = oneshot::channel::<Reply>();
-                let _ = &store
-                    .replicas
-                    .get(&client_id)
-                    .unwrap()
-                    .send((Command::ReplconfGetAck, Some(tx)))
-                    .await;
-                let reply = rx.await.unwrap();
-                println!(
-                    "TryExecuteResult::AddReplica: (GETACK for newly connected replica) received reply: {:?}",
-                    reply
-                );
+
+                // let (tx, rx) = oneshot::channel::<Reply>();
+                // let _ = &store
+                //     .replicas
+                //     .get(&client_id)
+                //     .unwrap()
+                //     .send((Command::ReplconfGetAck, Some(tx)))
+                //     .await;
+                // let reply = rx.await.unwrap();
+                // println!(
+                //     "TryExecuteResult::AddReplica: (GETACK for newly connected replica) received reply: {:?}",
+                //     reply
+                // );
 
                 let mut waiters_for_removal = Vec::new();
 
