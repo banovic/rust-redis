@@ -1547,7 +1547,9 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                             let (tx, rx) = oneshot::channel::<Reply>();
                             // This sends command to the client (running in this process, client is replica)
                             let _ = replica_tx.send((Command::ReplconfGetAck, Some(tx))).await;
-                            let reply = rx.await.unwrap();
+                            let x3 = rx.await;
+                            println!("TryExecuteResult::WaitCommand: received response: {:?}", x3);
+                            let reply = x3.unwrap();
                             println!("TryExecuteResult::WaitCommand: received reply: {:?}", reply);
                             available += 1;
                         }
