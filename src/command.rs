@@ -411,9 +411,9 @@ impl Command {
     pub fn from_resp(resp: Resp) -> Option<Command> {
         if let Resp::Array(els) = resp {
             assert!(els.len() > 0);
+            print!("Command from resp: {:?}", els);
 
             let name = &els[0].get_str().unwrap().to_ascii_uppercase()[..];
-            print!("Command from resp: {:?}", els);
             match name {
                 "ECHO" => Some(Command::Echo {
                     message: els[1].get_bytes().unwrap(),
