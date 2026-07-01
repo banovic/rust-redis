@@ -413,7 +413,7 @@ impl Command {
             assert!(els.len() > 0);
 
             let name = &els[0].get_str().unwrap().to_ascii_uppercase()[..];
-
+            print!("Command from resp: {:?}", els);
             match name {
                 "ECHO" => Some(Command::Echo {
                     message: els[1].get_bytes().unwrap(),
