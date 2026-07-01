@@ -1701,7 +1701,7 @@ async fn handle_client(
 
                         // Multiple commands can come together
                         //let (input, _) = parse_input_resp(&buffer).unwrap();
-                        let (inputs, _) = parse_resp(&buffer).unwrap();
+                        let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
                         //let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
                         for input in inputs {
