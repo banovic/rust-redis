@@ -409,9 +409,9 @@ impl Command {
     }
 
     pub fn from_resp(resp: Resp) -> Option<Command> {
+        print!("Command from resp: {:?}", resp);
         if let Resp::Array(els) = resp {
             assert!(els.len() > 0);
-            print!("Command from resp: {:?}", els);
 
             let name = &els[0].get_str().unwrap().to_ascii_uppercase()[..];
             match name {
