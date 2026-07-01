@@ -419,7 +419,7 @@ impl Command {
                     message: els[1].get_bytes().unwrap(),
                 }),
                 "PING" => Some(Command::Ping {
-                    message: els[1].get_bytes(),
+                    message: els.get(1).and_then(|el| el.get_bytes()),
                 }),
                 "SET" => match els.len() {
                     3 => Some(Command::Set {
