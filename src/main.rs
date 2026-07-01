@@ -1905,7 +1905,7 @@ async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(Resp, us
         println!("[read] None");
         None
     } else {
-        let (inputs, _) = parse_resp(&buffer).unwrap();
+        let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
         for resp in &inputs {
             println!("[read][{}] {:?}", resp.len(), resp);
         }

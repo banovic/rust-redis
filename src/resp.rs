@@ -215,13 +215,13 @@ fn parse_single_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Option<Resp>
 }
 
 pub fn parse_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<Resp>> {
-    let mut arrays = Vec::new();
+    let mut resp = Vec::new();
     let mut next_input = input;
     loop {
         match parse_single_resp(next_input) {
-            Ok((Some(array), new_input)) => {
+            Ok((Some(new_resp), new_input)) => {
                 next_input = new_input;
-                arrays.push(array);
+                resp.push(new_resp);
             }
             Ok((None, new_input)) => {
                 next_input = new_input;
@@ -233,7 +233,7 @@ pub fn parse_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<Resp>> {
             }
         }
     }
-    Ok((arrays, next_input))
+    Ok((resp, next_input))
 }
 
 // Encode
