@@ -126,23 +126,6 @@ pub fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     }
 }
 
-/// `or` combinator, it succeeds if `p1` or `p2` succeeds.
-pub fn or<'a, T: Debug>(p1: impl Parser<'a, T>, p2: impl Parser<'a, T>) -> impl Parser<'a, T> {
-    move |input: ParserInput<'a>| match p1.parse(input) {
-        Ok(result) => Ok(result),
-        _ => p2.parse(input),
-    }
-}
-
-/// `and` combinator, it succeeds when `p1` matches and then `p2` matches.
-pub fn and<'a, A, B>(p1: impl Parser<'a, A>, p2: impl Parser<'a, B>) -> impl Parser<'a, (A, B)> {
-    move |input: ParserInput<'a>| {
-        let (a, rest) = p1.parse(input)?;
-        let (b, rest) = p2.parse(rest)?;
-        Ok(((a, b), rest))
-    }
-}
-
 #[macro_export]
 macro_rules! and {
     ($p1: expr, $p2: expr $(,)?) => {{
@@ -235,6 +218,7 @@ macro_rules! and {
         }
     }};
 }
+pub(crate) use and;
 
 #[macro_export]
 macro_rules! or {
@@ -277,6 +261,7 @@ macro_rules! or {
         }
     }};
 }
+pub(crate) use or;
 
 /// `opt` combinator, it always succeeds. If it matches input is advanced.
 pub fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
@@ -300,14 +285,14 @@ where
 {
     move |input: ParserInput<'a>| {
         let digits = || recognize(take_while(|b| b.is_ascii_digit()));
-        let sign = || recognize(or(byte(b'-'), byte(b'+')));
+        let sign = || recognize(or!(byte(b'-'), byte(b'+')));
         let number = recognize(and!(opt(sign()), digits()));
         let (bytes, rest) = number.parse(input)?;
         let string = from_utf8(bytes).unwrap();
         let n = match string.parse::<T>() {
             Ok(v) => Ok(v),
             _ => Err(ParseError {
-                message: format!("[float] cannot parse from string: {}", string),
+                message: format!("[integer] cannot parse from string: {}", string),
             }),
         }?;
         Ok((n, rest))
@@ -320,7 +305,7 @@ where
 {
     move |input: ParserInput<'a>| {
         let digits = || recognize(take_while(|b| b.is_ascii_digit()));
-        let sign = || recognize(or(byte(b'-'), byte(b'+')));
+        let sign = || recognize(or!(byte(b'-'), byte(b'+')));
         let inifinity = || recognize(tag(b"inifinity"));
         let inf = || recognize(tag(b"inf"));
         let nan = || recognize(tag(b"nan"));

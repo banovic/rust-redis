@@ -34,10 +34,18 @@ use tokio::{
     time::timeout,
 };
 
+mod types;
+use types::*;
 mod parser;
 use parser::*;
+mod resp;
+use resp::Resp;
+mod command;
+use command::Command;
 
 use crate::PrimitiveValue::List;
+use crate::command::{XreadStreamIdInput, next_stream_id};
+use crate::resp::parse_resp;
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
     (0..s.len())
@@ -46,55 +54,55 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
         .collect()
 }
 
-type Bytes = Vec<u8>;
+// type Bytes = Vec<u8>;
 
-#[derive(Debug)]
-enum Reply {
-    Ok,
-    //Error(&'static str),
-    Null,
-    NullArray,
-    SimpleString(Vec<u8>),
-    SimpleError(Vec<u8>),
-    BulkString(Vec<u8>),
-    Integer(i64),
-    Array(Vec<Reply>),
-    RdbFile(Vec<u8>),
-}
+// #[derive(Debug)]
+// enum Reply {
+//     Ok,
+//     //Error(&'static str),
+//     Null,
+//     NullArray,
+//     SimpleString(Vec<u8>),
+//     SimpleError(Vec<u8>),
+//     BulkString(Vec<u8>),
+//     Integer(i64),
+//     Array(Vec<Reply>),
+//     RdbFile(Vec<u8>),
+// }
 
-#[derive(Debug, Clone)]
-enum RespElement {
-    String(Vec<u8>),
-    File(Vec<u8>),
-    Array(Vec<RespElement>),
-}
+// #[derive(Debug, Clone)]
+// enum RespElement {
+//     String(Vec<u8>),
+//     File(Vec<u8>),
+//     Array(Vec<RespElement>),
+// }
 
-impl RespElement {
-    fn to_words(&self) -> VecDeque<Bytes> {
-        match self {
-            RespElement::String(s) => VecDeque::from([s.clone()]),
-            RespElement::File(f) => VecDeque::from([f.clone()]),
-            // Only flat arrays
-            RespElement::Array(a) => {
-                let mut ws = VecDeque::new();
-                for w in a {
-                    if let RespElement::String(word) = w {
-                        ws.push_back(word.clone());
-                    }
-                }
-                ws
-            }
-        }
-    }
+// impl RespElement {
+//     fn to_words(&self) -> VecDeque<Bytes> {
+//         match self {
+//             RespElement::String(s) => VecDeque::from([s.clone()]),
+//             RespElement::File(f) => VecDeque::from([f.clone()]),
+//             // Only flat arrays
+//             RespElement::Array(a) => {
+//                 let mut ws = VecDeque::new();
+//                 for w in a {
+//                     if let RespElement::String(word) = w {
+//                         ws.push_back(word.clone());
+//                     }
+//                 }
+//                 ws
+//             }
+//         }
+//     }
 
-    fn size(&self) -> usize {
-        match self {
-            RespElement::Array(a) => a.iter().map(|r| r.size()).sum(),
-            RespElement::File(f) => f.len() + 3,
-            RespElement::String(s) => s.len() + 5,
-        }
-    }
-}
+//     fn size(&self) -> usize {
+//         match self {
+//             RespElement::Array(a) => a.iter().map(|r| r.size()).sum(),
+//             RespElement::File(f) => f.len() + 3,
+//             RespElement::String(s) => s.len() + 5,
+//         }
+//     }
+// }
 
 type RedisStream = BTreeMap<StreamKey, Vec<Bytes>>;
 
@@ -108,8 +116,8 @@ enum PrimitiveValue {
 /**
  * Store
  */
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-struct Key(Vec<u8>);
+// #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+// struct Key(Vec<u8>);
 
 #[derive(Debug)]
 struct Value {
@@ -121,7 +129,7 @@ struct Value {
 type WaiterId = usize;
 
 enum TryExecuteResult {
-    Done(Reply),
+    Done(Resp),
     BlockingXread(WaiterId, Vec<Key>, Vec<(u64, u64)>),
     BlockingBlpop(WaiterId, Vec<Key>),
     WaitCommand(WaiterId, u64, u64),
@@ -132,16 +140,16 @@ struct Store {
     // Since replicas are also clients of master (ie. sub-process inside same master process),
     // key is client id, and value is channel to that client/replica sub-process; channel works
     // with pair: command for replica and optional channel to send result back to master process.
-    replicas: HashMap<usize, mpsc::Sender<(Command, Option<oneshot::Sender<Reply>>)>>,
+    replicas: HashMap<usize, mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>>,
     data: HashMap<Key, Value>,
     waiter_id: WaiterId,
     watched_keys: HashMap<Key, HashSet<usize>>,
-    stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>, Vec<(u64, u64)>)>,
-    list_blpop_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>)>,
+    stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Resp>, Vec<Key>, Vec<(u64, u64)>)>,
+    list_blpop_waiters: HashMap<WaiterId, (oneshot::Sender<Resp>, Vec<Key>)>,
     // Clients waiting for WAIT command to complete, key is waiter id and value is tuple:
-    // channel to respond to client (reply), num of replicas client wanted and the target
+    // channel to respond to client (Resp), num of replicas client wanted and the target
     // replication offset they must have acked to count as caught up.
-    wait_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, u64, u64)>,
+    wait_waiters: HashMap<WaiterId, (oneshot::Sender<Resp>, u64, u64)>,
     // Bytes of write commands propagated to replicas so far.
     master_repl_offset: u64,
     // Last replication offset acked by each replica, keyed by client id.
@@ -192,12 +200,12 @@ impl Store {
         }
     }
 
-    fn fetch_xread(&self, keys: &[Key], ids: &[(u64, u64)]) -> (Vec<Reply>, bool) {
-        let mut rows: Vec<Reply> = Vec::new();
+    fn fetch_xread(&self, keys: &[Key], ids: &[(u64, u64)]) -> (Vec<Resp>, bool) {
+        let mut rows: Vec<Resp> = Vec::new();
         let mut is_empty = true;
 
         for (i, key) in keys.iter().enumerate() {
-            let mut stream_rows: Vec<Reply> = Vec::new();
+            let mut stream_rows: Vec<Resp> = Vec::new();
 
             if let Some(Value {
                 t: _,
@@ -205,28 +213,28 @@ impl Store {
                 value: PrimitiveValue::Stream(stream),
             }) = self.data.get(&key)
             {
-                stream_rows.push(Reply::BulkString(key.0.clone()));
+                stream_rows.push(Resp::BulkString(key.0.clone()));
 
-                let mut stream_row_data: Vec<Reply> = Vec::new();
+                let mut stream_row_data: Vec<Resp> = Vec::new();
 
                 for (&k, v) in stream.range((Excluded(ids[i]), Unbounded)) {
                     is_empty = false;
-                    let mut row: Vec<Reply> = Vec::new();
-                    row.push(Reply::BulkString(
+                    let mut row: Vec<Resp> = Vec::new();
+                    row.push(Resp::BulkString(
                         format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
                     ));
-                    row.push(Reply::Array(
+                    row.push(Resp::Array(
                         v.iter()
-                            .map(|s| Reply::BulkString(s.to_vec()))
+                            .map(|s| Resp::BulkString(s.to_vec()))
                             .collect::<Vec<_>>(),
                     ));
 
-                    stream_row_data.push(Reply::Array(row));
+                    stream_row_data.push(Resp::Array(row));
                 }
 
-                stream_rows.push(Reply::Array(stream_row_data));
+                stream_rows.push(Resp::Array(stream_row_data));
 
-                rows.push(Reply::Array(stream_rows));
+                rows.push(Resp::Array(stream_rows));
             }
         }
 
@@ -243,14 +251,14 @@ impl Store {
         }
 
         for waiter_id in waiters {
-            if let Some((reply_channel, keys, ids)) = self.stream_xread_waiters.remove(&waiter_id) {
+            if let Some((Resp_channel, keys, ids)) = self.stream_xread_waiters.remove(&waiter_id) {
                 let (rows, _) = self.fetch_xread(&keys, &ids);
-                let _ = reply_channel.send(Reply::Array(rows));
+                let _ = Resp_channel.send(Resp::Array(rows));
             }
         }
     }
 
-    fn fetch_blpop(&mut self, keys: &[Key]) -> (Reply, bool) {
+    fn fetch_blpop(&mut self, keys: &[Key]) -> (Resp, bool) {
         for k in keys {
             if let Some(Value {
                 t: _,
@@ -260,16 +268,13 @@ impl Store {
             {
                 if let Some(head) = list.pop_front() {
                     return (
-                        Reply::Array(vec![
-                            Reply::BulkString(k.clone().0),
-                            Reply::BulkString(head),
-                        ]),
+                        Resp::Array(vec![Resp::BulkString(k.clone().0), Resp::BulkString(head)]),
                         false,
                     );
                 }
             }
         }
-        (Reply::NullArray, true)
+        (Resp::NullArray, true)
     }
 
     fn notify_blpop_waiters(&mut self, key: &Key) {
@@ -283,14 +288,14 @@ impl Store {
         }
 
         for waiter_id in waiters {
-            let (reply_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
+            let (Resp_channel, keys) = self.list_blpop_waiters.remove(&waiter_id).unwrap();
             let (rows, is_empty) = self.fetch_blpop(&keys);
             if !is_empty {
-                let _ = reply_channel.send(rows);
+                let _ = Resp_channel.send(rows);
                 self.list_blpop_waiters.remove(&waiter_id);
             } else {
                 self.list_blpop_waiters
-                    .insert(waiter_id, (reply_channel, keys));
+                    .insert(waiter_id, (Resp_channel, keys));
             }
         }
     }
@@ -316,7 +321,7 @@ impl Store {
                     value: PrimitiveValue::Str(value),
                 };
                 self.data.insert(key, v);
-                TryExecuteResult::Done(Reply::Ok)
+                TryExecuteResult::Done(Resp::simple_string("OK"))
             }
 
             Command::Get { key } => match self.data.get(&key) {
@@ -325,14 +330,14 @@ impl Store {
                     ttl,
                     value: PrimitiveValue::Str(value),
                 }) => match ttl {
-                    None => TryExecuteResult::Done(Reply::BulkString(value.to_vec())),
+                    None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
                     Some(duration) if *t + *duration < Instant::now() => {
-                        TryExecuteResult::Done(Reply::Null)
+                        TryExecuteResult::Done(Resp::NullBulkString)
                     }
-                    Some(_) => TryExecuteResult::Done(Reply::BulkString(value.to_vec())),
+                    Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
                 },
-                Some(_) => TryExecuteResult::Done(Reply::Null), // TODO - error wrong type
-                None => TryExecuteResult::Done(Reply::Null),
+                Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
+                None => TryExecuteResult::Done(Resp::NullBulkString),
             },
 
             Command::Watch { keys } => {
@@ -344,7 +349,7 @@ impl Store {
                         })
                         .or_insert_with(|| HashSet::from([client_id]));
                 }
-                TryExecuteResult::Done(Reply::Ok)
+                TryExecuteResult::Done(Resp::simple_string("OK"))
             }
 
             Command::Unwatch => {
@@ -353,7 +358,7 @@ impl Store {
                     clients.remove(&client_id);
                 }
                 self.watched_keys.retain(|_, clients| !clients.is_empty());
-                TryExecuteResult::Done(Reply::SimpleString("OK".as_bytes().to_vec()))
+                TryExecuteResult::Done(Resp::SimpleString("OK".as_bytes().to_vec()))
             }
 
             Command::InternalExecuteTx { commands } => {
@@ -376,17 +381,17 @@ impl Store {
                     }
                     self.watched_keys.retain(|_, clients| !clients.is_empty());
 
-                    return TryExecuteResult::Done(Reply::NullArray);
+                    return TryExecuteResult::Done(Resp::NullArray);
                 }
 
                 // Execute tx
-                let mut replies: Vec<Reply> = Vec::new();
+                let mut replies: Vec<Resp> = Vec::new();
                 for cmd in commands {
-                    let reply = match self.try_execute(client_id, cmd) {
+                    let resp = match self.try_execute(client_id, cmd) {
                         TryExecuteResult::Done(r) => r,
-                        _ => Reply::NullArray,
+                        _ => Resp::NullArray,
                     };
-                    replies.push(reply);
+                    replies.push(resp);
                 }
 
                 // Cleanup watched keys for this client, and return null array
@@ -395,7 +400,7 @@ impl Store {
                 }
                 self.watched_keys.retain(|_, clients| !clients.is_empty());
                 println!("tx: store2: {:?}", self);
-                TryExecuteResult::Done(Reply::Array(replies))
+                TryExecuteResult::Done(Resp::Array(replies))
             }
             Command::InternalDiscardTx => {
                 // Cleanup watched keys for this client, and return null array
@@ -403,7 +408,7 @@ impl Store {
                     clients.remove(&client_id);
                 }
                 self.watched_keys.retain(|_, clients| !clients.is_empty());
-                TryExecuteResult::Done(Reply::Ok)
+                TryExecuteResult::Done(Resp::simple_string("OK"))
             }
             Command::Incr { key } => {
                 if let Some(Value {
@@ -417,10 +422,10 @@ impl Store {
                         Ok((n, _)) => {
                             *t = Instant::now();
                             *s = (n + 1).to_string().as_bytes().to_vec();
-                            TryExecuteResult::Done(Reply::Integer(n + 1))
+                            TryExecuteResult::Done(Resp::Integer(n + 1))
                         }
-                        _ => TryExecuteResult::Done(Reply::SimpleError(
-                            b"ERR value is not an integer or out of range".to_vec(),
+                        _ => TryExecuteResult::Done(Resp::simple_error(
+                            "ERR value is not an integer or out of range",
                         )),
                     }
                 } else {
@@ -432,7 +437,7 @@ impl Store {
                             value: PrimitiveValue::Str(1.to_string().as_bytes().to_vec()),
                         },
                     );
-                    TryExecuteResult::Done(Reply::Integer(1))
+                    TryExecuteResult::Done(Resp::Integer(1))
                 }
             }
             Command::Xadd {
@@ -456,20 +461,20 @@ impl Store {
                     let (tid, sid) = match next_stream_id(id, stream) {
                         Some(id) => id,
                         _ => {
-                            return TryExecuteResult::Done(Reply::SimpleError(
+                            return TryExecuteResult::Done(Resp::SimpleError(
                                 b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
                             ));
                         }
                     };
 
                     if (tid, sid) < (0, 1) {
-                        return TryExecuteResult::Done(Reply::SimpleError(
+                        return TryExecuteResult::Done(Resp::SimpleError(
                             b"ERR The ID specified in XADD must be greater than 0-0".to_vec(),
                         ));
                     }
 
                     if stream.contains_key(&(tid, sid)) {
-                        return TryExecuteResult::Done(Reply::SimpleError(
+                        return TryExecuteResult::Done(Resp::SimpleError(
                             b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
                                 .to_vec(),
                         ));
@@ -477,7 +482,7 @@ impl Store {
 
                     if let Some((latest, _)) = stream.last_key_value() {
                         if &(tid, sid) < latest {
-                            return TryExecuteResult::Done(Reply::SimpleError(
+                            return TryExecuteResult::Done(Resp::SimpleError(
                                 b"ERR The ID specified in XADD is equal or smaller than the target stream top item"
                                     .to_vec(),
                             ));
@@ -488,11 +493,11 @@ impl Store {
 
                     self.notify_xread_waiters(&key);
 
-                    TryExecuteResult::Done(Reply::BulkString(
+                    TryExecuteResult::Done(Resp::BulkString(
                         format!("{}-{}", tid, sid).as_bytes().to_vec(),
                     ))
                 } else {
-                    TryExecuteResult::Done(Reply::SimpleError(
+                    TryExecuteResult::Done(Resp::SimpleError(
                         b"ERR No stream found for given key".to_vec(),
                     ))
                 }
@@ -526,11 +531,11 @@ impl Store {
                 let (rows, is_empty) = self.fetch_xread(&keys, &real_ids);
 
                 if !is_empty {
-                    return TryExecuteResult::Done(Reply::Array(rows));
+                    return TryExecuteResult::Done(Resp::Array(rows));
                 }
 
                 if milliseconds.is_none() {
-                    return TryExecuteResult::Done(Reply::Array(vec![]));
+                    return TryExecuteResult::Done(Resp::Array(vec![]));
                 }
 
                 self.waiter_id += 1;
@@ -544,22 +549,22 @@ impl Store {
                     value: PrimitiveValue::Stream(stream),
                 }) = self.data.get(&key)
                 {
-                    let mut data: Vec<Reply> = Vec::new();
+                    let mut data: Vec<Resp> = Vec::new();
                     for (&k, v) in stream.range((Included(&start), Included(&end))) {
-                        let mut row: Vec<Reply> = Vec::new();
-                        row.push(Reply::BulkString(
+                        let mut row: Vec<Resp> = Vec::new();
+                        row.push(Resp::BulkString(
                             format!("{}-{}", k.0, k.1).as_bytes().to_vec(),
                         ));
-                        row.push(Reply::Array(
+                        row.push(Resp::Array(
                             v.iter()
-                                .map(|s| Reply::BulkString(s.to_vec()))
+                                .map(|s| Resp::BulkString(s.to_vec()))
                                 .collect::<Vec<_>>(),
                         ));
-                        data.push(Reply::Array(row));
+                        data.push(Resp::Array(row));
                     }
-                    TryExecuteResult::Done(Reply::Array(data))
+                    TryExecuteResult::Done(Resp::Array(data))
                 } else {
-                    TryExecuteResult::Done(Reply::SimpleError(
+                    TryExecuteResult::Done(Resp::SimpleError(
                         format!("Stream not found, XRANGE: {:?}", key)
                             .as_bytes()
                             .to_vec(),
@@ -572,18 +577,18 @@ impl Store {
                     t: _,
                     ttl: _,
                     value: PrimitiveValue::List(_),
-                }) => TryExecuteResult::Done(Reply::SimpleString("list".as_bytes().to_vec())),
+                }) => TryExecuteResult::Done(Resp::SimpleString("list".as_bytes().to_vec())),
                 Some(Value {
                     t: _,
                     ttl: _,
                     value: PrimitiveValue::Str(_),
-                }) => TryExecuteResult::Done(Reply::SimpleString("string".as_bytes().to_vec())),
+                }) => TryExecuteResult::Done(Resp::SimpleString("string".as_bytes().to_vec())),
                 Some(Value {
                     t: _,
                     ttl: _,
                     value: PrimitiveValue::Stream(_),
-                }) => TryExecuteResult::Done(Reply::SimpleString("stream".as_bytes().to_vec())),
-                _ => TryExecuteResult::Done(Reply::SimpleString("none".as_bytes().to_vec())),
+                }) => TryExecuteResult::Done(Resp::SimpleString("stream".as_bytes().to_vec())),
+                _ => TryExecuteResult::Done(Resp::SimpleString("none".as_bytes().to_vec())),
             },
 
             Command::Rpush { key, elements } => {
@@ -614,7 +619,7 @@ impl Store {
 
                 self.notify_blpop_waiters(&key);
 
-                TryExecuteResult::Done(Reply::Integer(n as i64))
+                TryExecuteResult::Done(Resp::Integer(n as i64))
             }
 
             Command::Lpush { key, mut elements } => {
@@ -646,7 +651,7 @@ impl Store {
 
                 self.notify_blpop_waiters(&key);
 
-                TryExecuteResult::Done(Reply::Integer(n as i64))
+                TryExecuteResult::Done(Resp::Integer(n as i64))
             }
 
             Command::Lpop { key, count } => {
@@ -657,27 +662,27 @@ impl Store {
                 }) = self.data.get_mut(&key)
                 {
                     if list.is_empty() {
-                        return TryExecuteResult::Done(Reply::Null);
+                        return TryExecuteResult::Done(Resp::NullBulkString);
                     }
 
                     match count {
                         None => {
                             let e = list.pop_front().unwrap();
-                            TryExecuteResult::Done(Reply::BulkString(e))
+                            TryExecuteResult::Done(Resp::BulkString(e))
                         }
                         Some(c) => {
                             let mut els = Vec::new();
                             for _ in 0..c {
                                 match list.pop_front() {
-                                    Some(e) => els.push(Reply::BulkString(e)),
-                                    None => return TryExecuteResult::Done(Reply::Array(els)),
+                                    Some(e) => els.push(Resp::BulkString(e)),
+                                    None => return TryExecuteResult::Done(Resp::Array(els)),
                                 }
                             }
-                            TryExecuteResult::Done(Reply::Array(els))
+                            TryExecuteResult::Done(Resp::Array(els))
                         }
                     }
                 } else {
-                    TryExecuteResult::Done(Reply::Null)
+                    TryExecuteResult::Done(Resp::NullBulkString)
                 }
             }
 
@@ -703,29 +708,29 @@ impl Store {
                     let b = (list.len() as i32 - 1).min(b);
 
                     if a > b {
-                        return TryExecuteResult::Done(Reply::Array(vec![]));
+                        return TryExecuteResult::Done(Resp::Array(vec![]));
                     }
 
                     let mut els = Vec::new();
                     for i in (a as usize)..=(b as usize) {
-                        els.push(Reply::BulkString(list[i].to_vec()));
+                        els.push(Resp::BulkString(list[i].to_vec()));
                     }
-                    TryExecuteResult::Done(Reply::Array(els))
+                    TryExecuteResult::Done(Resp::Array(els))
                 } else {
-                    TryExecuteResult::Done(Reply::Array(vec![]))
+                    TryExecuteResult::Done(Resp::Array(vec![]))
                 }
             }
 
             Command::Llen { key } => {
                 let n = self.map_list(&key, |list| list.len()).unwrap_or(0);
-                TryExecuteResult::Done(Reply::Integer(n as i64))
+                TryExecuteResult::Done(Resp::Integer(n as i64))
             }
 
             Command::Blpop { keys, timeout: _ } => {
-                let (reply, is_empty) = self.fetch_blpop(&keys);
+                let (Resp, is_empty) = self.fetch_blpop(&keys);
 
                 if !is_empty {
-                    return TryExecuteResult::Done(reply);
+                    return TryExecuteResult::Done(Resp);
                 }
                 self.waiter_id += 1;
                 TryExecuteResult::BlockingBlpop(self.waiter_id, keys)
@@ -747,14 +752,16 @@ impl Store {
                     )
                     .to_string(),
                 );
-                info.push_str(&format!("\nmaster_repl_offset:{}", self.master_repl_offset).to_string());
-                TryExecuteResult::Done(Reply::BulkString(info.as_bytes().to_vec()))
+                info.push_str(
+                    &format!("\nmaster_repl_offset:{}", self.master_repl_offset).to_string(),
+                );
+                TryExecuteResult::Done(Resp::BulkString(info.as_bytes().to_vec()))
             }
 
             Command::Ping { message } => {
                 let result = match message {
-                    Some(m) => Reply::BulkString(m),
-                    None => Reply::SimpleString("PONG".as_bytes().to_vec()),
+                    Some(m) => Resp::BulkString(m),
+                    None => Resp::SimpleString("PONG".as_bytes().to_vec()),
                 };
                 TryExecuteResult::Done(result)
             }
@@ -767,86 +774,86 @@ impl Store {
                 TryExecuteResult::WaitCommand(self.waiter_id, numreplicas, timeout)
             }
 
-            _ => TryExecuteResult::Done(Reply::Null),
+            _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
     }
 }
 
-// milliseconds-seqeunce id
-#[derive(Debug, Clone, Copy)]
-enum XaddStreamIdInput {
-    Explicit(u64, u64),
-    AutoGenSeq(u64),
-    AugoGen,
-}
-#[derive(Debug, Clone, Copy)]
-enum XreadStreamIdInput {
-    Explicit(u64, u64),
-    DollarId,
-}
+// // milliseconds-seqeunce id
+// #[derive(Debug, Clone, Copy)]
+// enum XaddStreamIdInput {
+//     Explicit(u64, u64),
+//     AutoGenSeq(u64),
+//     AugoGen,
+// }
+// #[derive(Debug, Clone, Copy)]
+// enum XreadStreamIdInput {
+//     Explicit(u64, u64),
+//     DollarId,
+// }
 
-type StreamKey = (u64, u64);
+// type StreamKey = (u64, u64);
 
-fn parse_input_stream_id<'a>(id: &'a Vec<u8>) -> Option<XaddStreamIdInput> {
-    match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
-        Ok(((tid, _, sid), _)) => Some(XaddStreamIdInput::Explicit(tid, sid)),
-        _ => match and!(integer::<u64>(), byte(b'-'), byte(b'*')).parse(id) {
-            Ok(((tid, _, _), _)) => Some(XaddStreamIdInput::AutoGenSeq(tid)),
-            _ => match parser::Parser::parse(&byte(b'*'), id) {
-                Ok(_) => Some(XaddStreamIdInput::AugoGen),
-                _ => None,
-            },
-        },
-    }
-}
+// fn parse_input_stream_id<'a>(id: &'a Vec<u8>) -> Option<XaddStreamIdInput> {
+//     match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
+//         Ok(((tid, _, sid), _)) => Some(XaddStreamIdInput::Explicit(tid, sid)),
+//         _ => match and!(integer::<u64>(), byte(b'-'), byte(b'*')).parse(id) {
+//             Ok(((tid, _, _), _)) => Some(XaddStreamIdInput::AutoGenSeq(tid)),
+//             _ => match parser::Parser::parse(&byte(b'*'), id) {
+//                 Ok(_) => Some(XaddStreamIdInput::AugoGen),
+//                 _ => None,
+//             },
+//         },
+//     }
+// }
 
-fn parse_xread_stream_id_input<'a>(id: &'a Vec<u8>) -> Option<XreadStreamIdInput> {
-    match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
-        Ok(((tid, _, sid), _)) => Some(XreadStreamIdInput::Explicit(tid, sid)),
-        _ => match parser::Parser::parse(&byte(b'$'), id) {
-            Ok(_) => Some(XreadStreamIdInput::DollarId),
-            _ => None,
-        },
-    }
-}
+// fn parse_xread_stream_id_input<'a>(id: &'a Vec<u8>) -> Option<XreadStreamIdInput> {
+//     match and!(integer::<u64>(), byte(b'-'), integer::<u64>()).parse(id) {
+//         Ok(((tid, _, sid), _)) => Some(XreadStreamIdInput::Explicit(tid, sid)),
+//         _ => match parser::Parser::parse(&byte(b'$'), id) {
+//             Ok(_) => Some(XreadStreamIdInput::DollarId),
+//             _ => None,
+//         },
+//     }
+// }
 
-fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, u64)> {
-    let latest = stream.last_key_value();
-    match ski {
-        XaddStreamIdInput::Explicit(tid, sid) => Some((tid, sid)),
-        XaddStreamIdInput::AutoGenSeq(tid) => {
-            if latest.is_some() {
-                let (&(orig_tid, orig_sid), _) = latest.unwrap();
-                if tid > orig_tid {
-                    Some((tid, 0))
-                } else if tid == orig_tid {
-                    Some((tid, orig_sid + 1))
-                } else {
-                    None
-                }
-            } else {
-                if tid == 0 {
-                    Some((tid, 1))
-                } else {
-                    Some((tid, 0))
-                }
-            }
-        }
-        XaddStreamIdInput::AugoGen => {
-            let tid = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis() as u64;
-            match latest {
-                Some((&(orig_tid, _), _)) if orig_tid < tid => Some((tid, 0)),
-                Some((&(orig_tid, orig_sid), _)) if orig_tid == tid => Some((tid, orig_sid + 1)),
-                Some((&(orig_tid, _), _)) if orig_tid > tid => None,
-                None => Some((tid, 0)),
-                _ => panic!("No idea?"),
-            }
-        }
-    }
-}
+// fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, u64)> {
+//     let latest = stream.last_key_value();
+//     match ski {
+//         XaddStreamIdInput::Explicit(tid, sid) => Some((tid, sid)),
+//         XaddStreamIdInput::AutoGenSeq(tid) => {
+//             if latest.is_some() {
+//                 let (&(orig_tid, orig_sid), _) = latest.unwrap();
+//                 if tid > orig_tid {
+//                     Some((tid, 0))
+//                 } else if tid == orig_tid {
+//                     Some((tid, orig_sid + 1))
+//                 } else {
+//                     None
+//                 }
+//             } else {
+//                 if tid == 0 {
+//                     Some((tid, 1))
+//                 } else {
+//                     Some((tid, 0))
+//                 }
+//             }
+//         }
+//         XaddStreamIdInput::AugoGen => {
+//             let tid = SystemTime::now()
+//                 .duration_since(UNIX_EPOCH)
+//                 .expect("Time went backwards")
+//                 .as_millis() as u64;
+//             match latest {
+//                 Some((&(orig_tid, _), _)) if orig_tid < tid => Some((tid, 0)),
+//                 Some((&(orig_tid, orig_sid), _)) if orig_tid == tid => Some((tid, orig_sid + 1)),
+//                 Some((&(orig_tid, _), _)) if orig_tid > tid => None,
+//                 None => Some((tid, 0)),
+//                 _ => panic!("No idea?"),
+//             }
+//         }
+//     }
+// }
 
 // fn parse_simple_string<'a>() -> impl Parser<'a, RespElement> {
 //     move |input| match and!(
@@ -863,621 +870,621 @@ fn next_stream_id(ski: XaddStreamIdInput, stream: &RedisStream) -> Option<(u64, 
 //     }
 // }
 
-fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
-    let ((_, s, _), rest) = and!(
-        byte(b'+'),
-        take_until(&[b'\r', b'\n']),
-        tag(&[b'\r', b'\n'])
-    )
-    .parse(input)?;
+// fn parse_simple_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
+//     let ((_, s, _), rest) = and!(
+//         byte(b'+'),
+//         take_until(&[b'\r', b'\n']),
+//         tag(&[b'\r', b'\n'])
+//     )
+//     .parse(input)?;
 
-    Ok((
-        (RespElement::String(s.to_vec()), input.len() - rest.len()),
-        rest,
-    ))
-}
+//     Ok((
+//         (RespElement::String(s.to_vec()), input.len() - rest.len()),
+//         rest,
+//     ))
+// }
 
-fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
-    let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
-    let ((_, s, _), rest) =
-        and!(tag(&[b'\r', b'\n']), take(l), tag(&[b'\r', b'\n'])).parse(rest)?;
+// fn parse_bulk_string<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
+//     let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
+//     let ((_, s, _), rest) =
+//         and!(tag(&[b'\r', b'\n']), take(l), tag(&[b'\r', b'\n'])).parse(rest)?;
 
-    Ok((
-        (RespElement::String(s.to_vec()), input.len() - rest.len()),
-        rest,
-    ))
-}
+//     Ok((
+//         (RespElement::String(s.to_vec()), input.len() - rest.len()),
+//         rest,
+//     ))
+// }
 
-fn parse_rdb_file<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
-    let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
-    let ((_, s), rest) = and!(tag(&[b'\r', b'\n']), take(l)).parse(rest)?;
+// fn parse_rdb_file<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
+//     let ((_, l), rest) = and!(byte(b'$'), integer::<usize>()).parse(input)?;
+//     let ((_, s), rest) = and!(tag(&[b'\r', b'\n']), take(l)).parse(rest)?;
 
-    Ok((
-        (RespElement::File(s.to_vec()), input.len() - rest.len()),
-        rest,
-    ))
-}
+//     Ok((
+//         (RespElement::File(s.to_vec()), input.len() - rest.len()),
+//         rest,
+//     ))
+// }
 
-fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
-    let ((_, l, _), rest) =
-        and!(byte(b'*'), integer::<usize>(), tag(&[b'\r', b'\n'])).parse(input)?;
+// fn parse_array<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
+//     let ((_, l, _), rest) =
+//         and!(byte(b'*'), integer::<usize>(), tag(&[b'\r', b'\n'])).parse(input)?;
 
-    let mut elements = Vec::new();
-    let mut new_rest = rest;
-    let mut len = 0;
-    for _ in 0..l {
-        let ((el, l), rest) = parse_input_resp(new_rest)?;
-        new_rest = rest;
-        elements.push(el);
-        len += l;
-    }
+//     let mut elements = Vec::new();
+//     let mut new_rest = rest;
+//     let mut len = 0;
+//     for _ in 0..l {
+//         let ((el, l), rest) = parse_input_resp(new_rest)?;
+//         new_rest = rest;
+//         elements.push(el);
+//         len += l;
+//     }
 
-    Ok((
-        (RespElement::Array(elements), input.len() - new_rest.len()),
-        new_rest,
-    ))
-}
+//     Ok((
+//         (RespElement::Array(elements), input.len() - new_rest.len()),
+//         new_rest,
+//     ))
+// }
 
-fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
-    match input[0] {
-        // Rdb file is encoded as same as bulk string - *but* it is missing ending 'r\\n' bytes (2 bytes).
-        // First match greedy for bulk string, and fallback to rdb file:
-        b'$' => parse_bulk_string(input).or_else(|_| parse_rdb_file(input)),
-        b'+' => parse_simple_string(input),
-        b'*' => parse_array(input),
-        _ => {
-            // println!(
-            //     "Error parsing RESP, input: {}",
-            //     String::from_utf8(input.to_vec()).unwrap()
-            // );
-            Err(ParseError {
-                message: format!("unknown RESP first byte: {}, input: {:?}", input[0], input),
-            })
-        }
-    }
-}
+// fn parse_input_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, (RespElement, usize)> {
+//     match input[0] {
+//         // Rdb file is encoded as same as bulk string - *but* it is missing ending 'r\\n' bytes (2 bytes).
+//         // First match greedy for bulk string, and fallback to rdb file:
+//         b'$' => parse_bulk_string(input).or_else(|_| parse_rdb_file(input)),
+//         b'+' => parse_simple_string(input),
+//         b'*' => parse_array(input),
+//         _ => {
+//             // println!(
+//             //     "Error parsing RESP, input: {}",
+//             //     String::from_utf8(input.to_vec()).unwrap()
+//             // );
+//             Err(ParseError {
+//                 message: format!("unknown RESP first byte: {}, input: {:?}", input[0], input),
+//             })
+//         }
+//     }
+// }
 
-fn parse_all_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<(RespElement, usize)>> {
-    let mut arrays = Vec::new();
-    let mut next_input = input;
-    loop {
-        match parse_input_resp(next_input) {
-            Ok((array, new_input)) => {
-                next_input = new_input;
-                arrays.push(array);
-            }
-            Err(e) => {
-                // TODO must check if input is exhausted - which is ok, vs actual error
-                //println!("Error parsing all resp arrays: {:?}", e);
-                break;
-            }
-        }
-    }
-    Ok((arrays, next_input))
-}
+// fn parse_all_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<(RespElement, usize)>> {
+//     let mut arrays = Vec::new();
+//     let mut next_input = input;
+//     loop {
+//         match parse_input_resp(next_input) {
+//             Ok((array, new_input)) => {
+//                 next_input = new_input;
+//                 arrays.push(array);
+//             }
+//             Err(e) => {
+//                 // TODO must check if input is exhausted - which is ok, vs actual error
+//                 //println!("Error parsing all resp arrays: {:?}", e);
+//                 break;
+//             }
+//         }
+//     }
+//     Ok((arrays, next_input))
+// }
 
-fn write_usize(out: &mut Vec<u8>, n: usize) {
-    let mut s = n.to_string().into_bytes();
-    out.append(&mut s);
-}
+// fn write_usize(out: &mut Vec<u8>, n: usize) {
+//     let mut s = n.to_string().into_bytes();
+//     out.append(&mut s);
+// }
 
-fn write_bytes(out: &mut Vec<u8>, bs: &[u8]) {
-    out.extend_from_slice(bs);
-}
+// fn write_bytes(out: &mut Vec<u8>, bs: &[u8]) {
+//     out.extend_from_slice(bs);
+// }
 
-fn encode_reply(r: &Reply) -> Vec<u8> {
-    let mut out = Vec::new();
+// fn encode_Resp(r: &Reply) -> Vec<u8> {
+//     let mut out = Vec::new();
 
-    match r {
-        Reply::Ok => {
-            write_bytes(&mut out, &[b'+', b'O', b'K', b'\r', b'\n']);
-        }
-        // Reply::Error(s) => {
-        //     write_bytes(&mut out, &[b'-']);
-        //     write_bytes(&mut out, &s.as_bytes().to_vec());
-        //     write_bytes(&mut out, &[b'\r', b'\n']);
-        // }
-        Reply::Null => {
-            write_bytes(&mut out, &[b'$', b'-', b'1', b'\r', b'\n']);
-        }
-        Reply::NullArray => {
-            write_bytes(&mut out, &[b'*', b'-', b'1', b'\r', b'\n']);
-        }
-        Reply::SimpleString(value) => {
-            write_bytes(&mut out, &[b'+']);
-            write_bytes(&mut out, &value[..]);
-            write_bytes(&mut out, &[b'\r', b'\n']);
-        }
-        Reply::SimpleError(value) => {
-            write_bytes(&mut out, &[b'-']);
-            write_bytes(&mut out, &value[..]);
-            write_bytes(&mut out, &[b'\r', b'\n']);
-        }
-        Reply::BulkString(value) => {
-            write_bytes(&mut out, &[b'$']);
-            write_usize(&mut out, value.len());
-            write_bytes(&mut out, &[b'\r', b'\n']);
-            write_bytes(&mut out, &value[..]);
-            write_bytes(&mut out, &[b'\r', b'\n']);
-        }
-        Reply::Integer(n) => {
-            write_bytes(&mut out, &[b':']);
-            write_bytes(&mut out, n.to_string().as_bytes());
-            write_bytes(&mut out, &[b'\r', b'\n']);
-        }
-        Reply::Array(elements) => {
-            write_bytes(&mut out, &[b'*']);
-            write_usize(&mut out, elements.len());
-            write_bytes(&mut out, &[b'\r', b'\n']);
-            for e in elements {
-                out.append(&mut encode_reply(e));
-            }
-        }
-        Reply::RdbFile(bytes) => {
-            write_bytes(&mut out, &[b'$']);
-            write_usize(&mut out, bytes.len());
-            write_bytes(&mut out, &[b'\r', b'\n']);
-            write_bytes(&mut out, &bytes[..]);
-        }
-    }
+//     match r {
+//         Resp::Ok => {
+//             write_bytes(&mut out, &[b'+', b'O', b'K', b'\r', b'\n']);
+//         }
+//         // Reply::Error(s) => {
+//         //     write_bytes(&mut out, &[b'-']);
+//         //     write_bytes(&mut out, &s.as_bytes().to_vec());
+//         //     write_bytes(&mut out, &[b'\r', b'\n']);
+//         // }
+//         Reply::Null => {
+//             write_bytes(&mut out, &[b'$', b'-', b'1', b'\r', b'\n']);
+//         }
+//         Reply::NullArray => {
+//             write_bytes(&mut out, &[b'*', b'-', b'1', b'\r', b'\n']);
+//         }
+//         Reply::SimpleString(value) => {
+//             write_bytes(&mut out, &[b'+']);
+//             write_bytes(&mut out, &value[..]);
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//         }
+//         Reply::SimpleError(value) => {
+//             write_bytes(&mut out, &[b'-']);
+//             write_bytes(&mut out, &value[..]);
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//         }
+//         Reply::BulkString(value) => {
+//             write_bytes(&mut out, &[b'$']);
+//             write_usize(&mut out, value.len());
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//             write_bytes(&mut out, &value[..]);
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//         }
+//         Reply::Integer(n) => {
+//             write_bytes(&mut out, &[b':']);
+//             write_bytes(&mut out, n.to_string().as_bytes());
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//         }
+//         Reply::Array(elements) => {
+//             write_bytes(&mut out, &[b'*']);
+//             write_usize(&mut out, elements.len());
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//             for e in elements {
+//                 out.append(&mut encode_reply(e));
+//             }
+//         }
+//         Reply::RdbFile(bytes) => {
+//             write_bytes(&mut out, &[b'$']);
+//             write_usize(&mut out, bytes.len());
+//             write_bytes(&mut out, &[b'\r', b'\n']);
+//             write_bytes(&mut out, &bytes[..]);
+//         }
+//     }
 
-    out
-}
+//     out
+// }
 
-async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
-    let out = encode_reply(reply);
-    let result = stream.write_all(&out[..]).await;
+async fn write_resp(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
+    //let out = encode_reply(reply);
+    let result = stream.write_all(&resp.to_bytes()[..]).await;
     let _ = stream.flush();
     result
 }
 
-#[derive(Debug, Clone)]
-enum Command {
-    Echo {
-        message: Bytes,
-    },
-    Ping {
-        message: Option<Bytes>,
-    },
-    Set {
-        key: Key,
-        value: Bytes,
-        ex: Option<u64>,
-        px: Option<u64>,
-    },
-    Get {
-        key: Key,
-    },
-    Rpush {
-        key: Key,
-        elements: Vec<Bytes>,
-    },
-    Lrange {
-        key: Key,
-        start: i32,
-        end: i32,
-    },
-    Lpush {
-        key: Key,
-        elements: Vec<Bytes>,
-    },
-    Llen {
-        key: Key,
-    },
-    Lpop {
-        key: Key,
-        count: Option<u32>,
-    },
-    Blpop {
-        keys: Vec<Key>,
-        timeout: f64,
-    },
-    Type {
-        key: Key,
-    },
-    Xadd {
-        key: Key,
-        id: XaddStreamIdInput,
-        field_values: Vec<Bytes>, // field1 value1 ... fieldN valueN
-    },
-    Xrange {
-        key: Key,
-        start: (u64, u64),
-        end: (u64, u64),
-    },
-    Xread {
-        keys: Vec<Key>,
-        milliseconds: Option<u64>,
-        ids: Vec<XreadStreamIdInput>,
-    },
-    Incr {
-        key: Key,
-    },
-    Multi,
-    Exec,
-    Discard,
-    Watch {
-        keys: Vec<Key>,
-    },
-    Unwatch,
-    InternalExecuteTx {
-        commands: Vec<Command>,
-    },
-    InternalDiscardTx,
-    Info {
-        section: Option<Bytes>,
-    },
-    ReplconfListeningPort {
-        port: u16,
-    },
-    ReplconfCapa {
-        capabilites: Vec<Bytes>,
-    },
-    Psync {
-        replication_id: String,
-        offset: i64,
-    },
-    ReplconfGetAck,
-    ReplconfAck {
-        ack_bytes: u64,
-    },
-    Wait {
-        numreplicas: u64,
-        timeout: u64,
-    },
-}
+// #[derive(Debug, Clone)]
+// enum Command {
+//     Echo {
+//         message: Bytes,
+//     },
+//     Ping {
+//         message: Option<Bytes>,
+//     },
+//     Set {
+//         key: Key,
+//         value: Bytes,
+//         ex: Option<u64>,
+//         px: Option<u64>,
+//     },
+//     Get {
+//         key: Key,
+//     },
+//     Rpush {
+//         key: Key,
+//         elements: Vec<Bytes>,
+//     },
+//     Lrange {
+//         key: Key,
+//         start: i32,
+//         end: i32,
+//     },
+//     Lpush {
+//         key: Key,
+//         elements: Vec<Bytes>,
+//     },
+//     Llen {
+//         key: Key,
+//     },
+//     Lpop {
+//         key: Key,
+//         count: Option<u32>,
+//     },
+//     Blpop {
+//         keys: Vec<Key>,
+//         timeout: f64,
+//     },
+//     Type {
+//         key: Key,
+//     },
+//     Xadd {
+//         key: Key,
+//         id: XaddStreamIdInput,
+//         field_values: Vec<Bytes>, // field1 value1 ... fieldN valueN
+//     },
+//     Xrange {
+//         key: Key,
+//         start: (u64, u64),
+//         end: (u64, u64),
+//     },
+//     Xread {
+//         keys: Vec<Key>,
+//         milliseconds: Option<u64>,
+//         ids: Vec<XreadStreamIdInput>,
+//     },
+//     Incr {
+//         key: Key,
+//     },
+//     Multi,
+//     Exec,
+//     Discard,
+//     Watch {
+//         keys: Vec<Key>,
+//     },
+//     Unwatch,
+//     InternalExecuteTx {
+//         commands: Vec<Command>,
+//     },
+//     InternalDiscardTx,
+//     Info {
+//         section: Option<Bytes>,
+//     },
+//     ReplconfListeningPort {
+//         port: u16,
+//     },
+//     ReplconfCapa {
+//         capabilites: Vec<Bytes>,
+//     },
+//     Psync {
+//         replication_id: String,
+//         offset: i64,
+//     },
+//     ReplconfGetAck,
+//     ReplconfAck {
+//         ack_bytes: u64,
+//     },
+//     Wait {
+//         numreplicas: u64,
+//         timeout: u64,
+//     },
+// }
 
-impl Command {
-    fn from_bytes(mut bs: VecDeque<Bytes>) -> Option<Command> {
-        let name = bs.pop_front()?;
+// impl Command {
+//     fn from_bytes(mut bs: VecDeque<Bytes>) -> Option<Command> {
+//         let name = bs.pop_front()?;
 
-        match &name[..] {
-            b"ECHO" => match bs.pop_front() {
-                Some(message) => Some(Command::Echo { message }),
-                None => None,
-            },
-            b"PING" => Some(Command::Ping {
-                message: bs.pop_front(),
-            }),
-            b"SET" => match bs.len() {
-                2 => {
-                    let key = Key(bs.pop_front().unwrap());
-                    let value = bs.pop_front().unwrap();
-                    Some(Command::Set {
-                        key,
-                        value,
-                        ex: None,
-                        px: None,
-                    })
-                }
-                4 => {
-                    let key = Key(bs.pop_front().unwrap());
-                    let value = bs.pop_front().unwrap();
-                    let expx = bs.pop_front().unwrap();
-                    let tmp = bs.pop_front().unwrap();
-                    let (ttl, _) = parser::Parser::parse(&integer::<u64>(), &tmp[..]).unwrap();
-                    let (ex, px) = match &expx[..] {
-                        b"EX" => (Some(ttl), None),
-                        b"PX" => (None, Some(ttl)),
-                        _ => (None, None),
-                    };
-                    Some(Command::Set { key, value, ex, px })
-                }
-                _ => None,
-            },
-            b"GET" => match bs.pop_front() {
-                Some(key) => Some(Command::Get { key: Key(key) }),
-                None => None,
-            },
-            // Lists
-            b"RPUSH" => match bs.len() {
-                0 | 1 => None,
-                _ => Some(Command::Rpush {
-                    key: Key(bs.pop_front().unwrap()),
-                    elements: Vec::from(bs),
-                }),
-            },
-            b"LRANGE" => {
-                let key = Key(bs.pop_front().unwrap());
-                let (start, _) = parser::Parser::parse(&integer::<i32>(), &bs[0][..]).unwrap();
-                let (end, _) = parser::Parser::parse(&integer::<i32>(), &bs[1][..]).unwrap();
-                Some(Command::Lrange { key, start, end })
-            }
-            b"LPUSH" => match bs.len() {
-                0 | 1 => None,
-                _ => Some(Command::Lpush {
-                    key: Key(bs.pop_front().unwrap()),
-                    elements: Vec::from(bs),
-                }),
-            },
-            b"LLEN" => match bs.pop_front() {
-                Some(key) => Some(Command::Llen { key: Key(key) }),
-                None => None,
-            },
-            b"LPOP" => {
-                let key = Key(bs.pop_front().unwrap());
-                let count = if bs.len() > 0 {
-                    let (c, _) = parser::Parser::parse(&integer::<u32>(), &bs[0][..]).unwrap();
-                    Some(c)
-                } else {
-                    None
-                };
-                Some(Command::Lpop { key, count })
-            }
-            b"BLPOP" => {
-                let tmp = bs.pop_back().unwrap();
-                let (timeout, _) = parser::Parser::parse(&float::<f64>(), &tmp[..]).unwrap();
-                let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
-                Some(Command::Blpop { keys, timeout })
-            }
-            // Streams
-            b"TYPE" => Some(Command::Type {
-                key: Key(bs.pop_front().unwrap()),
-            }),
-            b"XADD" => {
-                let key = Key(bs.pop_front().unwrap());
-                let id = parse_input_stream_id(&bs.pop_front().unwrap()).unwrap();
-                Some(Command::Xadd {
-                    key,
-                    id,
-                    field_values: Vec::from(bs),
-                })
-            }
-            b"XRANGE" => {
-                let key = Key(bs.pop_front().unwrap());
-                let s = &bs.pop_front().unwrap()[..];
-                let e = &bs.pop_front().unwrap()[..];
-                let start = if s.len() == 1 && s[0] == b'-' {
-                    (0, 1)
-                } else {
-                    let ((start_tid, _, start_sid), _) =
-                        and!(integer::<u64>(), byte(b'-'), integer::<u64>())
-                            .parse(s)
-                            .unwrap();
-                    (start_tid, start_sid)
-                };
-                let end = if e.len() == 1 && e[0] == b'+' {
-                    (u64::MAX, u64::MAX)
-                } else {
-                    let ((end_tid, _, end_sid), _) =
-                        and!(integer::<u64>(), byte(b'-'), integer::<u64>())
-                            .parse(e)
-                            .unwrap();
-                    (end_tid, end_sid)
-                };
-                Some(Command::Xrange { key, start, end })
-            }
-            b"XREAD" => {
-                let block = bs[0].to_ascii_uppercase() == b"BLOCK";
-                let milliseconds = if block {
-                    bs.pop_front(); // BLOCK
-                    let m = bs.pop_front().unwrap();
-                    let (ms, _) = parser::Parser::parse(&integer::<u64>(), &m[..]).unwrap();
-                    Some(ms)
-                } else {
-                    None
-                };
+//         match &name[..] {
+//             b"ECHO" => match bs.pop_front() {
+//                 Some(message) => Some(Command::Echo { message }),
+//                 None => None,
+//             },
+//             b"PING" => Some(Command::Ping {
+//                 message: bs.pop_front(),
+//             }),
+//             b"SET" => match bs.len() {
+//                 2 => {
+//                     let key = Key(bs.pop_front().unwrap());
+//                     let value = bs.pop_front().unwrap();
+//                     Some(Command::Set {
+//                         key,
+//                         value,
+//                         ex: None,
+//                         px: None,
+//                     })
+//                 }
+//                 4 => {
+//                     let key = Key(bs.pop_front().unwrap());
+//                     let value = bs.pop_front().unwrap();
+//                     let expx = bs.pop_front().unwrap();
+//                     let tmp = bs.pop_front().unwrap();
+//                     let (ttl, _) = parser::Parser::parse(&integer::<u64>(), &tmp[..]).unwrap();
+//                     let (ex, px) = match &expx[..] {
+//                         b"EX" => (Some(ttl), None),
+//                         b"PX" => (None, Some(ttl)),
+//                         _ => (None, None),
+//                     };
+//                     Some(Command::Set { key, value, ex, px })
+//                 }
+//                 _ => None,
+//             },
+//             b"GET" => match bs.pop_front() {
+//                 Some(key) => Some(Command::Get { key: Key(key) }),
+//                 None => None,
+//             },
+//             // Lists
+//             b"RPUSH" => match bs.len() {
+//                 0 | 1 => None,
+//                 _ => Some(Command::Rpush {
+//                     key: Key(bs.pop_front().unwrap()),
+//                     elements: Vec::from(bs),
+//                 }),
+//             },
+//             b"LRANGE" => {
+//                 let key = Key(bs.pop_front().unwrap());
+//                 let (start, _) = parser::Parser::parse(&integer::<i32>(), &bs[0][..]).unwrap();
+//                 let (end, _) = parser::Parser::parse(&integer::<i32>(), &bs[1][..]).unwrap();
+//                 Some(Command::Lrange { key, start, end })
+//             }
+//             b"LPUSH" => match bs.len() {
+//                 0 | 1 => None,
+//                 _ => Some(Command::Lpush {
+//                     key: Key(bs.pop_front().unwrap()),
+//                     elements: Vec::from(bs),
+//                 }),
+//             },
+//             b"LLEN" => match bs.pop_front() {
+//                 Some(key) => Some(Command::Llen { key: Key(key) }),
+//                 None => None,
+//             },
+//             b"LPOP" => {
+//                 let key = Key(bs.pop_front().unwrap());
+//                 let count = if bs.len() > 0 {
+//                     let (c, _) = parser::Parser::parse(&integer::<u32>(), &bs[0][..]).unwrap();
+//                     Some(c)
+//                 } else {
+//                     None
+//                 };
+//                 Some(Command::Lpop { key, count })
+//             }
+//             b"BLPOP" => {
+//                 let tmp = bs.pop_back().unwrap();
+//                 let (timeout, _) = parser::Parser::parse(&float::<f64>(), &tmp[..]).unwrap();
+//                 let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
+//                 Some(Command::Blpop { keys, timeout })
+//             }
+//             // Streams
+//             b"TYPE" => Some(Command::Type {
+//                 key: Key(bs.pop_front().unwrap()),
+//             }),
+//             b"XADD" => {
+//                 let key = Key(bs.pop_front().unwrap());
+//                 let id = parse_input_stream_id(&bs.pop_front().unwrap()).unwrap();
+//                 Some(Command::Xadd {
+//                     key,
+//                     id,
+//                     field_values: Vec::from(bs),
+//                 })
+//             }
+//             b"XRANGE" => {
+//                 let key = Key(bs.pop_front().unwrap());
+//                 let s = &bs.pop_front().unwrap()[..];
+//                 let e = &bs.pop_front().unwrap()[..];
+//                 let start = if s.len() == 1 && s[0] == b'-' {
+//                     (0, 1)
+//                 } else {
+//                     let ((start_tid, _, start_sid), _) =
+//                         and!(integer::<u64>(), byte(b'-'), integer::<u64>())
+//                             .parse(s)
+//                             .unwrap();
+//                     (start_tid, start_sid)
+//                 };
+//                 let end = if e.len() == 1 && e[0] == b'+' {
+//                     (u64::MAX, u64::MAX)
+//                 } else {
+//                     let ((end_tid, _, end_sid), _) =
+//                         and!(integer::<u64>(), byte(b'-'), integer::<u64>())
+//                             .parse(e)
+//                             .unwrap();
+//                     (end_tid, end_sid)
+//                 };
+//                 Some(Command::Xrange { key, start, end })
+//             }
+//             b"XREAD" => {
+//                 let block = bs[0].to_ascii_uppercase() == b"BLOCK";
+//                 let milliseconds = if block {
+//                     bs.pop_front(); // BLOCK
+//                     let m = bs.pop_front().unwrap();
+//                     let (ms, _) = parser::Parser::parse(&integer::<u64>(), &m[..]).unwrap();
+//                     Some(ms)
+//                 } else {
+//                     None
+//                 };
 
-                assert!(
-                    bs[0].to_ascii_uppercase() == b"STREAMS",
-                    "Must have literal STREAM arg"
-                );
-                bs.pop_front(); // STREAMS
+//                 assert!(
+//                     bs[0].to_ascii_uppercase() == b"STREAMS",
+//                     "Must have literal STREAM arg"
+//                 );
+//                 bs.pop_front(); // STREAMS
 
-                // keys
-                let l = bs.len();
+//                 // keys
+//                 let l = bs.len();
 
-                assert!(l % 2 == 0, "Must have even number of keys and ids");
+//                 assert!(l % 2 == 0, "Must have even number of keys and ids");
 
-                let ids = bs
-                    .split_off(l / 2)
-                    .iter()
-                    .map(|id| parse_xread_stream_id_input(id).unwrap())
-                    .collect::<Vec<_>>();
+//                 let ids = bs
+//                     .split_off(l / 2)
+//                     .iter()
+//                     .map(|id| parse_xread_stream_id_input(id).unwrap())
+//                     .collect::<Vec<_>>();
 
-                let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
+//                 let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
 
-                assert!(
-                    ids.len() == keys.len(),
-                    "Must have same count of keys and ids"
-                );
+//                 assert!(
+//                     ids.len() == keys.len(),
+//                     "Must have same count of keys and ids"
+//                 );
 
-                Some(Command::Xread {
-                    keys,
-                    milliseconds,
-                    ids,
-                })
-            }
-            // Transactions
-            b"INCR" => Some(Command::Incr {
-                key: Key(bs.pop_front().unwrap()),
-            }),
-            b"MULTI" => Some(Command::Multi),
-            b"EXEC" => Some(Command::Exec),
-            b"DISCARD" => Some(Command::Discard),
-            // Optimistic locking
-            b"WATCH" => Some(Command::Watch {
-                keys: bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>(),
-            }),
-            b"UNWATCH" => Some(Command::Unwatch),
-            b"INFO" => Some(Command::Info {
-                section: bs.pop_front(),
-            }),
-            b"REPLCONF" => {
-                let next_token = bs.pop_front().unwrap();
-                match &next_token[..] {
-                    b"listening-port" => {
-                        let port_part = bs.pop_front().unwrap();
-                        let (port, _) = integer::<u16>().parse(&port_part).unwrap();
-                        Some(Command::ReplconfListeningPort { port })
-                    }
-                    b"capa" => Some(Command::ReplconfCapa {
-                        capabilites: bs.into(),
-                    }),
-                    b"GETACK" => {
-                        let star = bs.pop_front().unwrap();
-                        if star.len() == 1 && star[0] == b'*' {
-                            Some(Command::ReplconfGetAck)
-                        } else {
-                            None
-                        }
-                    }
-                    b"ACK" => {
-                        let ack_bytes_field = bs.pop_front().unwrap();
-                        let (ack_bytes, _) = integer::<u64>().parse(&ack_bytes_field).unwrap();
-                        Some(Command::ReplconfAck { ack_bytes })
-                    }
-                    _ => panic!("Unknown REPLCONF shape"),
-                }
-            }
-            b"PSYNC" => {
-                let replication_id = String::from_utf8(bs.pop_front().unwrap()).unwrap();
-                let offset_part = bs.pop_front().unwrap();
-                let (offset, _) = integer::<i64>().parse(&offset_part).unwrap();
-                Some(Command::Psync {
-                    replication_id,
-                    offset,
-                })
-            }
-            b"WAIT" => {
-                let numreplicas_field = bs.pop_front().unwrap();
-                let timeout_field = bs.pop_front().unwrap();
-                let (numreplicas, _) = integer::<u64>().parse(&numreplicas_field).unwrap();
-                let (timeout, _) = integer::<u64>().parse(&timeout_field).unwrap();
-                Some(Command::Wait {
-                    numreplicas,
-                    timeout,
-                })
-            }
-            _ => None,
-        }
-    }
+//                 Some(Command::Xread {
+//                     keys,
+//                     milliseconds,
+//                     ids,
+//                 })
+//             }
+//             // Transactions
+//             b"INCR" => Some(Command::Incr {
+//                 key: Key(bs.pop_front().unwrap()),
+//             }),
+//             b"MULTI" => Some(Command::Multi),
+//             b"EXEC" => Some(Command::Exec),
+//             b"DISCARD" => Some(Command::Discard),
+//             // Optimistic locking
+//             b"WATCH" => Some(Command::Watch {
+//                 keys: bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>(),
+//             }),
+//             b"UNWATCH" => Some(Command::Unwatch),
+//             b"INFO" => Some(Command::Info {
+//                 section: bs.pop_front(),
+//             }),
+//             b"REPLCONF" => {
+//                 let next_token = bs.pop_front().unwrap();
+//                 match &next_token[..] {
+//                     b"listening-port" => {
+//                         let port_part = bs.pop_front().unwrap();
+//                         let (port, _) = integer::<u16>().parse(&port_part).unwrap();
+//                         Some(Command::ReplconfListeningPort { port })
+//                     }
+//                     b"capa" => Some(Command::ReplconfCapa {
+//                         capabilites: bs.into(),
+//                     }),
+//                     b"GETACK" => {
+//                         let star = bs.pop_front().unwrap();
+//                         if star.len() == 1 && star[0] == b'*' {
+//                             Some(Command::ReplconfGetAck)
+//                         } else {
+//                             None
+//                         }
+//                     }
+//                     b"ACK" => {
+//                         let ack_bytes_field = bs.pop_front().unwrap();
+//                         let (ack_bytes, _) = integer::<u64>().parse(&ack_bytes_field).unwrap();
+//                         Some(Command::ReplconfAck { ack_bytes })
+//                     }
+//                     _ => panic!("Unknown REPLCONF shape"),
+//                 }
+//             }
+//             b"PSYNC" => {
+//                 let replication_id = String::from_utf8(bs.pop_front().unwrap()).unwrap();
+//                 let offset_part = bs.pop_front().unwrap();
+//                 let (offset, _) = integer::<i64>().parse(&offset_part).unwrap();
+//                 Some(Command::Psync {
+//                     replication_id,
+//                     offset,
+//                 })
+//             }
+//             b"WAIT" => {
+//                 let numreplicas_field = bs.pop_front().unwrap();
+//                 let timeout_field = bs.pop_front().unwrap();
+//                 let (numreplicas, _) = integer::<u64>().parse(&numreplicas_field).unwrap();
+//                 let (timeout, _) = integer::<u64>().parse(&timeout_field).unwrap();
+//                 Some(Command::Wait {
+//                     numreplicas,
+//                     timeout,
+//                 })
+//             }
+//             _ => None,
+//         }
+//     }
 
-    fn modified_keys(&self) -> Vec<Key> {
-        match self {
-            Command::Set {
-                key,
-                value: _,
-                ex: _,
-                px: _,
-            } => vec![key.clone()],
-            Command::Lpush { key, elements: _ } => vec![key.clone()],
-            Command::Rpush { key, elements: _ } => vec![key.clone()],
-            Command::Incr { key } => vec![key.clone()],
-            Command::Xadd {
-                key,
-                id: _,
-                field_values: _,
-            } => vec![key.clone()],
-            _ => vec![],
-        }
-    }
+//     fn modified_keys(&self) -> Vec<Key> {
+//         match self {
+//             Command::Set {
+//                 key,
+//                 value: _,
+//                 ex: _,
+//                 px: _,
+//             } => vec![key.clone()],
+//             Command::Lpush { key, elements: _ } => vec![key.clone()],
+//             Command::Rpush { key, elements: _ } => vec![key.clone()],
+//             Command::Incr { key } => vec![key.clone()],
+//             Command::Xadd {
+//                 key,
+//                 id: _,
+//                 field_values: _,
+//             } => vec![key.clone()],
+//             _ => vec![],
+//         }
+//     }
 
-    // in  milliseconds , for all timeouts
-    fn block_timeout(&self) -> Option<u64> {
-        match self {
-            Command::Blpop { keys: _, timeout } => {
-                if *timeout == 0. {
-                    Some(u64::MAX)
-                } else {
-                    Some((timeout * 1_000.) as u64)
-                }
-            }
-            Command::Xread {
-                keys: _,
-                milliseconds: Some(ms),
-                ids: _,
-            } => {
-                if *ms == 0 {
-                    Some(u64::MAX)
-                } else {
-                    Some(*ms)
-                }
-            }
-            _ => None,
-        }
-    }
+//     // in  milliseconds , for all timeouts
+//     fn block_timeout(&self) -> Option<u64> {
+//         match self {
+//             Command::Blpop { keys: _, timeout } => {
+//                 if *timeout == 0. {
+//                     Some(u64::MAX)
+//                 } else {
+//                     Some((timeout * 1_000.) as u64)
+//                 }
+//             }
+//             Command::Xread {
+//                 keys: _,
+//                 milliseconds: Some(ms),
+//                 ids: _,
+//             } => {
+//                 if *ms == 0 {
+//                     Some(u64::MAX)
+//                 } else {
+//                     Some(*ms)
+//                 }
+//             }
+//             _ => None,
+//         }
+//     }
 
-    fn is_replicatable(&self) -> bool {
-        match self {
-            Command::Set {
-                key: _,
-                value: _,
-                ex: _,
-                px: _,
-            } => true,
-            Command::ReplconfGetAck => true,
-            _ => false,
-        }
-    }
+//     fn is_replicatable(&self) -> bool {
+//         match self {
+//             Command::Set {
+//                 key: _,
+//                 value: _,
+//                 ex: _,
+//                 px: _,
+//             } => true,
+//             Command::ReplconfGetAck => true,
+//             _ => false,
+//         }
+//     }
 
-    fn encode_to_bytes(&self) -> Option<Vec<u8>> {
-        let mut out = Vec::new();
+//     fn encode_to_bytes(&self) -> Option<Vec<u8>> {
+//         let mut out = Vec::new();
 
-        match self {
-            Command::Set { key, value, ex, px } => {
-                write_bytes(&mut out, &[b'*', b'3', b'\r', b'\n']);
-                write_bytes(&mut out, &"$3\r\nSET\r\n".as_bytes().to_vec());
+//         match self {
+//             Command::Set { key, value, ex, px } => {
+//                 write_bytes(&mut out, &[b'*', b'3', b'\r', b'\n']);
+//                 write_bytes(&mut out, &"$3\r\nSET\r\n".as_bytes().to_vec());
 
-                // Key
-                write_bytes(
-                    &mut out,
-                    &format!("${}\r\n", key.0.len()).as_bytes().to_vec(),
-                );
-                write_bytes(&mut out, &key.0);
-                write_bytes(&mut out, &"\r\n".as_bytes().to_vec());
+//                 // Key
+//                 write_bytes(
+//                     &mut out,
+//                     &format!("${}\r\n", key.0.len()).as_bytes().to_vec(),
+//                 );
+//                 write_bytes(&mut out, &key.0);
+//                 write_bytes(&mut out, &"\r\n".as_bytes().to_vec());
 
-                // Value
-                write_bytes(
-                    &mut out,
-                    &format!("${}\r\n", value.len()).as_bytes().to_vec(),
-                );
-                write_bytes(&mut out, &value);
-                write_bytes(&mut out, &"\r\n".as_bytes().to_vec());
+//                 // Value
+//                 write_bytes(
+//                     &mut out,
+//                     &format!("${}\r\n", value.len()).as_bytes().to_vec(),
+//                 );
+//                 write_bytes(&mut out, &value);
+//                 write_bytes(&mut out, &"\r\n".as_bytes().to_vec());
 
-                // ex
-                if let Some(ex) = ex {
-                    write_bytes(&mut out, &"$2\r\nEX\r\n".as_bytes().to_vec());
-                    let ex_s = format!("{}", ex);
-                    write_bytes(
-                        &mut out,
-                        &format!("${}\r\n{}\r\n", ex_s.len(), ex_s)
-                            .as_bytes()
-                            .to_vec(),
-                    );
-                }
+//                 // ex
+//                 if let Some(ex) = ex {
+//                     write_bytes(&mut out, &"$2\r\nEX\r\n".as_bytes().to_vec());
+//                     let ex_s = format!("{}", ex);
+//                     write_bytes(
+//                         &mut out,
+//                         &format!("${}\r\n{}\r\n", ex_s.len(), ex_s)
+//                             .as_bytes()
+//                             .to_vec(),
+//                     );
+//                 }
 
-                // px
-                if let Some(px) = px {
-                    write_bytes(&mut out, &"$2\r\nPX\r\n".as_bytes().to_vec());
-                    let px_s = format!("{}", px);
-                    write_bytes(
-                        &mut out,
-                        &format!("${}\r\n{}\r\n", px_s.len(), px_s)
-                            .as_bytes()
-                            .to_vec(),
-                    );
-                }
+//                 // px
+//                 if let Some(px) = px {
+//                     write_bytes(&mut out, &"$2\r\nPX\r\n".as_bytes().to_vec());
+//                     let px_s = format!("{}", px);
+//                     write_bytes(
+//                         &mut out,
+//                         &format!("${}\r\n{}\r\n", px_s.len(), px_s)
+//                             .as_bytes()
+//                             .to_vec(),
+//                     );
+//                 }
 
-                Some(out)
-            }
-            Command::ReplconfGetAck => {
-                write_bytes(&mut out, &[b'*', b'3', b'\r', b'\n']);
-                write_bytes(&mut out, &"$8\r\nREPLCONF\r\n".as_bytes().to_vec());
-                write_bytes(&mut out, &"$6\r\nGETACK\r\n".as_bytes().to_vec());
-                write_bytes(&mut out, &"$1\r\n*\r\n".as_bytes().to_vec());
-                Some(out)
-            }
-            _ => None,
-        }
-    }
-}
+//                 Some(out)
+//             }
+//             Command::ReplconfGetAck => {
+//                 write_bytes(&mut out, &[b'*', b'3', b'\r', b'\n']);
+//                 write_bytes(&mut out, &"$8\r\nREPLCONF\r\n".as_bytes().to_vec());
+//                 write_bytes(&mut out, &"$6\r\nGETACK\r\n".as_bytes().to_vec());
+//                 write_bytes(&mut out, &"$1\r\n*\r\n".as_bytes().to_vec());
+//                 Some(out)
+//             }
+//             _ => None,
+//         }
+//     }
+// }
 
 enum Envelope {
     WithReply {
         client_id: usize,
         command: Command,
-        reply_channel: oneshot::Sender<Reply>,
+        reply_channel: oneshot::Sender<Resp>,
     },
     TimeoutXread {
         waiter_id: WaiterId,
@@ -1487,14 +1494,14 @@ enum Envelope {
     },
     AddReplica {
         client_id: usize,
-        tx: mpsc::Sender<(Command, Option<oneshot::Sender<Reply>>)>,
+        tx: mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>,
     },
     Replicate {
         command: Command,
     },
     FromMaster {
         command: Command,
-        reply_channel: oneshot::Sender<Reply>,
+        reply_channel: oneshot::Sender<Resp>,
     },
     WaitCommandTimeout {
         waiter_id: WaiterId,
@@ -1529,9 +1536,10 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                         if let Some(replication_command) = replication_command {
                             // Advance the master replication offset by the encoded size
                             // of the command we are about to propagate.
-                            if let Some(encoded) = replication_command.encode_to_bytes() {
-                                store.master_repl_offset += encoded.len() as u64;
-                            }
+                            // TODO
+                            // if let Some(encoded) = replication_command.encode_to_bytes() {
+                            //     store.master_repl_offset += encoded.len() as u64;
+                            // }
                             for (client_id, tx) in &store.replicas {
                                 println!(
                                     "[client_id = {}] Replicating command: {:?}",
@@ -1571,7 +1579,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                         let target = store.master_repl_offset;
                         if numreplicas == 0 || store.count_acked(target) >= numreplicas {
                             let _ =
-                                reply_channel.send(Reply::Integer(store.count_acked(target) as i64));
+                                reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
                         } else {
                             // Ask each replica for its offset; replies arrive asynchronously
                             // as Envelope::ReplconfAck and drive completion below.
@@ -1594,13 +1602,13 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             Envelope::TimeoutXread { waiter_id } => {
                 // Deregister interest if there's any, and remove interestent
                 if let Some((reply_channel, _, _)) = store.stream_xread_waiters.remove(&waiter_id) {
-                    let _ = reply_channel.send(Reply::NullArray);
+                    let _ = reply_channel.send(Resp::NullArray);
                 }
             }
             Envelope::TimeoutBlpop { waiter_id } => {
                 // Deregister interest if there's any, and remove interestent
                 if let Some((reply_channel, _)) = store.list_blpop_waiters.remove(&waiter_id) {
-                    let _ = reply_channel.send(Reply::NullArray);
+                    let _ = reply_channel.send(Resp::NullArray);
                 }
             }
             Envelope::WaitCommandTimeout { waiter_id } => {
@@ -1608,7 +1616,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 if let Some((reply_channel, _numreplicas, target)) =
                     store.wait_waiters.remove(&waiter_id)
                 {
-                    let _ = reply_channel.send(Reply::Integer(store.count_acked(target) as i64));
+                    let _ = reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
                 }
             }
             Envelope::ReplconfAck {
@@ -1630,7 +1638,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 for waiter_id in done {
                     let (reply_channel, _numreplicas, target) =
                         store.wait_waiters.remove(&waiter_id).unwrap();
-                    let _ = reply_channel.send(Reply::Integer(store.count_acked(target) as i64));
+                    let _ = reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
                 }
             }
             Envelope::AddReplica {
@@ -1659,7 +1667,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                         let _ = reply_channel.send(reply);
                     }
                     _ => {
-                        let _ = reply_channel.send(Reply::Null);
+                        let _ = reply_channel.send(Resp::NullBulkString);
                     }
                 };
             }
@@ -1677,7 +1685,7 @@ async fn handle_client(
     let mut buffer = [0u8; 1024];
 
     // Channel to this client, so master can send commands for replication
-    let (tx, mut rx) = mpsc::channel::<(Command, Option<oneshot::Sender<Reply>>)>(1024);
+    let (tx, mut rx) = mpsc::channel::<(Command, Option<oneshot::Sender<Resp>>)>(1024);
 
     loop {
         select! {
@@ -1693,17 +1701,17 @@ async fn handle_client(
 
                         // Multiple commands can come together
                         //let (input, _) = parse_input_resp(&buffer).unwrap();
-                        let (inputs, _) = parse_all_resp(&buffer).unwrap();
+                        let (inputs, _) = parse_resp(&buffer).unwrap();
                         //let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
-                        for (input, len) in inputs {
-                            let command = Command::from_bytes(input.to_words()).unwrap();
+                        for input in inputs {
+                            let command = Command::from_resp(input).unwrap();
                             match (&command, &mut queue) {
                                 (Command::ReplconfListeningPort { port: _ }, _) => {
-                                    let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
+                                    let _ = write_resp(&mut stream, &Resp::SimpleString("OK".as_bytes().to_vec())).await;
                                 }
                                 (Command::ReplconfCapa { capabilites: _ }, _) => {
-                                    let _ = write_reply(&mut stream, &Reply::SimpleString("OK".as_bytes().to_vec())).await;
+                                    let _ = write_resp(&mut stream, &Resp::SimpleString("OK".as_bytes().to_vec())).await;
                                 }
                                 // Psync
                                 (
@@ -1714,8 +1722,8 @@ async fn handle_client(
                                     _,
                                 ) => {
                                     // This client is replica
-                                    let _ = write_reply(&mut stream, &Reply::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
-                                    let _ = write_reply(&mut stream, &Reply::RdbFile(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
+                                    let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
+                                    let _ = write_resp(&mut stream, &Resp::File(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
                                     // Start counting bytes sent to this channel now:
                                     let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
                                 },
@@ -1724,55 +1732,55 @@ async fn handle_client(
                                 }
                                 // Just echo
                                 (Command::Echo { message }, _) => {
-                                    let _ = write_reply(&mut stream, &Reply::BulkString(message.to_vec())).await;
+                                    let _ = write_resp(&mut stream, &Resp::BulkString(message.to_vec())).await;
                                 },
                                 (Command::Ping { message }, _) => {
                                     match message {
                                         Some(m) => {
-                                            let _ = write_reply(&mut stream, &Reply::BulkString(m.to_vec())).await;
+                                            let _ = write_resp(&mut stream, &Resp::BulkString(m.to_vec())).await;
                                         },
                                         None => {
-                                            let _ = write_reply(&mut stream, &Reply::SimpleString("PONG".as_bytes().to_vec())).await;
+                                            let _ = write_resp(&mut stream, &Resp::SimpleString("PONG".as_bytes().to_vec())).await;
                                         }
                                     };
                                 },
                                 // Start tx
                                 (Command::Multi, None) => {
                                     queue = Some(VecDeque::new());
-                                    let _ = write_reply(&mut stream, &Reply::Ok).await;
+                                    let _ = write_resp(&mut stream, &Resp::simple_string("OK")).await;
                                 }
                                 (Command::Exec, Some(_)) => {
                                     let commands = queue.take().unwrap();
                                     let tx = Command::InternalExecuteTx {
                                         commands: commands.into(),
                                     };
-                                    let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, tx).await).await;
+                                    let _ = write_resp(&mut stream, &execute_command(&producer_ch, client_id, tx).await).await;
                                 }
                                 (Command::Exec, None) => {
-                                    let _ = write_reply(&mut stream, &Reply::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
+                                    let _ = write_resp(&mut stream, &Resp::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
                                 },
                                 (Command::Watch { keys: _ }, Some(_)) => {
-                                    let _ = write_reply(&mut stream, &Reply::SimpleError(
+                                    let _ = write_resp(&mut stream, &Resp::SimpleError(
                                         "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
                                     )).await;
                                 }
                                 (Command::Discard, None) => {
-                                    let _ = write_reply(&mut stream, &Reply::SimpleError(
+                                    let _ = write_resp(&mut stream, &Resp::SimpleError(
                                         "ERR DISCARD without MULTI".as_bytes().to_vec(),
                                     )).await;
                                 }
                                 (Command::Discard, Some(_)) => {
                                     queue = None;
-                                    let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await).await;
+                                    let _ = write_resp(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await).await;
                                 }
 
                                 // Inside tx
                                 (_, Some(q)) => {
                                     q.push_back(command);
-                                    let _ = write_reply(&mut stream, &Reply::SimpleString("QUEUED".as_bytes().to_vec())).await;
+                                    let _ = write_resp(&mut stream, &Resp::SimpleString("QUEUED".as_bytes().to_vec())).await;
                                 }
                                 (_, None) => {
-                                    let _ = write_reply(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
+                                    let _ = write_resp(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
                                 }
                             };
                         }
@@ -1788,13 +1796,14 @@ async fn handle_client(
                 // (this is all happening on master, this is process inside master / server)
                 println!("Replica (master process, client connection handler) received command: {:?}", replicate_command);
                 if let Some((command, _reply_tx)) = replicate_command {
-                    if let Some(encoded_command) = command.encode_to_bytes() {
-                        println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
-                        let x1 = stream.write_all(&encoded_command).await;
-                        println!("Result x1: {:?}", x1);
-                        let x2 = stream.flush().await;
-                        println!("Result x2: {:?}", x2);
-                    }
+                    // TODO
+                    // if let Some(encoded_command) = command.to_resp().unwrap().to_bytes() {
+                    //     println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
+                    //     let x1 = stream.write_all(&encoded_command).await;
+                    //     println!("Result x1: {:?}", x1);
+                    //     let x2 = stream.flush().await;
+                    //     println!("Result x2: {:?}", x2);
+                    // }
                 }
             }
         }
@@ -1807,9 +1816,9 @@ async fn execute_command(
     store_ch: &mpsc::Sender<Envelope>,
     client_id: usize,
     command: Command,
-) -> Reply {
+) -> Resp {
     // Create command
-    let (reply_ch_sender, reply_ch_receiver) = oneshot::channel::<Reply>();
+    let (reply_ch_sender, reply_ch_receiver) = oneshot::channel::<Resp>();
     // Pass to store to handle
     let envelope = Envelope::WithReply {
         client_id,
@@ -1843,20 +1852,20 @@ struct Args {
 // function that processes messages replica receovis from master
 async fn process_replica_message(
     store_tx: &mpsc::Sender<Envelope>,
-    input: RespElement,
+    input: Resp,
     ack_bytes: usize,
-) -> Option<Reply> {
+) -> Option<Resp> {
     println!("Replica processing input: {:?}", input);
-    if let Some(command) = Command::from_bytes(input.to_words()) {
-        println!(
-            "[process_replica_message] input: {:?}, command: {:?}",
-            input, command
-        );
+    if let Some(command) = Command::from_resp(input) {
+        // println!(
+        //     "[process_replica_message] input: {:?}, command: {:?}",
+        //     input, command
+        // );
         let reply = match command {
-            Command::ReplconfGetAck => Some(Reply::Array(vec![
-                Reply::BulkString("REPLCONF".as_bytes().to_vec()),
-                Reply::BulkString("ACK".as_bytes().to_vec()),
-                Reply::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
+            Command::ReplconfGetAck => Some(Resp::Array(vec![
+                Resp::BulkString("REPLCONF".as_bytes().to_vec()),
+                Resp::BulkString("ACK".as_bytes().to_vec()),
+                Resp::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
             ])),
             // Command::Get { key: _ } => {
             //     let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
@@ -1880,15 +1889,15 @@ async fn process_replica_message(
         };
         reply
     } else {
-        println!(
-            "[PROCESS_REPLICA_MESSAGE] could not decode command from input: {:?}",
-            input
-        );
+        // println!(
+        //     "[PROCESS_REPLICA_MESSAGE] could not decode command from input: {:?}",
+        //     input
+        // );
         None
     }
 }
 
-async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(RespElement, usize)>> {
+async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(Resp, usize)>> {
     let mut buffer = [0; 1024];
     let n = stream.read(&mut buffer).await.unwrap(); // +PONG
     let read_inputs = if n == 0 {
@@ -1896,14 +1905,15 @@ async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(RespElem
         println!("[read] None");
         None
     } else {
-        let (inputs, _) = parse_all_resp(&buffer).unwrap();
-        for (resp, len) in &inputs {
-            println!("[read][{}] {:?}", len, resp);
+        let (inputs, _) = parse_resp(&buffer).unwrap();
+        for resp in &inputs {
+            println!("[read][{}] {:?}", resp.len(), resp);
         }
         Some(inputs)
     };
 
-    read_inputs
+    //read_inputs
+    todo!()
 }
 
 // This is run when server is replica
@@ -1911,35 +1921,35 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
     // Handshake: 1) PING - PONG
-    let reply = Reply::Array(vec![Reply::BulkString("PING".as_bytes().to_vec())]);
-    let _ = write_reply(&mut stream, &reply).await;
+    let reply = Resp::Array(vec![Resp::BulkString("PING".as_bytes().to_vec())]);
+    let _ = write_resp(&mut stream, &reply).await;
     let _ = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 2) REPLCONF
-    let reply = Reply::Array(vec![
-        Reply::BulkString("REPLCONF".as_bytes().to_vec()),
-        Reply::BulkString("listening-port".as_bytes().to_vec()),
-        Reply::BulkString(format!("{}", port).as_bytes().to_vec()),
+    let reply = Resp::Array(vec![
+        Resp::BulkString("REPLCONF".as_bytes().to_vec()),
+        Resp::BulkString("listening-port".as_bytes().to_vec()),
+        Resp::BulkString(format!("{}", port).as_bytes().to_vec()),
     ]);
-    let _ = write_reply(&mut stream, &reply).await;
+    let _ = write_resp(&mut stream, &reply).await;
     let _ = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 3) REPLCONF
-    let reply = Reply::Array(vec![
-        Reply::BulkString("REPLCONF".as_bytes().to_vec()),
-        Reply::BulkString("capa".as_bytes().to_vec()),
-        Reply::BulkString("psync2".as_bytes().to_vec()),
+    let reply = Resp::Array(vec![
+        Resp::BulkString("REPLCONF".as_bytes().to_vec()),
+        Resp::BulkString("capa".as_bytes().to_vec()),
+        Resp::BulkString("psync2".as_bytes().to_vec()),
     ]);
-    let _ = write_reply(&mut stream, &reply).await;
+    let _ = write_resp(&mut stream, &reply).await;
     let _ = read_inputs_from_stream(&mut stream).await;
 
     // Handshake: 4) PSYNC
-    let reply = Reply::Array(vec![
-        Reply::BulkString("PSYNC".as_bytes().to_vec()),
-        Reply::BulkString("?".as_bytes().to_vec()),
-        Reply::BulkString("-1".as_bytes().to_vec()),
+    let reply = Resp::Array(vec![
+        Resp::BulkString("PSYNC".as_bytes().to_vec()),
+        Resp::BulkString("?".as_bytes().to_vec()),
+        Resp::BulkString("-1".as_bytes().to_vec()),
     ]);
-    let _ = write_reply(&mut stream, &reply).await;
+    let _ = write_resp(&mut stream, &reply).await;
     //let _ = read_inputs_from_stream(&mut stream).await;
 
     // FULLRESYNC response tO PSYNC and RDB file, 3rd message can be also in these inputs
@@ -1974,7 +1984,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
         ack_bytes += bs;
         match process_replica_message(&mut store_tx, input, ack_bytes).await {
             Some(reply) => {
-                let _ = write_reply(&mut stream, &reply).await;
+                let _ = write_resp(&mut stream, &reply).await;
             }
             _ => {}
         };
@@ -1998,7 +2008,7 @@ async fn run_replica(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelop
                                 "Replica (its process), has response for master: {:?}",
                                 reply
                             );
-                            let _ = write_reply(&mut stream, &reply).await;
+                            let _ = write_resp(&mut stream, &reply).await;
                         }
                         _ => {}
                     };
@@ -2045,3 +2055,71 @@ async fn main() {
         tokio::spawn(handle_client(client_id, stream, client_producer_ch));
     }
 }
+
+// v2
+
+/// Server can be Master or Replica - this is RunConfig.
+/// RunConfig comes from CLI arguments.
+/// However is server run, it will accept client connections.
+/// This means that server that is Replica will be one of the client on server that is Master.
+/// If server is run as Replica - first thing it should do is connect to Master and do Handshake.
+/// Handshake will read required sequnce of commands from strem, but there can be more RESP
+/// elements than required - those leftovers are returned and processed as regular inputs.
+async fn b_handshake(stream: &mut TcpStream) -> Vec<Resp> {
+    todo!()
+}
+async fn b_run_server_as_master() {}
+async fn b_run_server_as_replica() {}
+type ClientId = u32;
+async fn b_run_client(client_id: ClientId) {
+    let mut is_replica = false;
+    todo!()
+}
+
+/// Communication inside server process.
+/// Server process is Master
+/// - receives Commands from normal clients
+///     - Command can be executed immediatelly and return result
+///     - Command can be executed at later time, and timeout is scheduled
+///       This means that the Command will be executed later - if more data comes,
+///       or it will be resolved by timeout eventually
+/// - receives Commands from clients that are replica
+///     - will see if anything special needed? $
+/// - sends commands results (either immediatelly or eventually) to clients
+/// - sends commands to replicas, through replica clients
+///
+/// Server process is Replica
+///
+/// Replica clients (inside Master server) receive inputs from:
+/// - stream - which if connected with its Replica server
+/// - channel - which listens for messages from Master server task.
+///
+/// Server process, Master or Replica - holds a state in Store:
+// #[derive(Debug)]
+// struct BStore {
+//     // How Master server sees replica clients
+//     replicas: HashMap<ClientId, mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>>,
+//     // Data, key can point to String, List, Stream (which Value represents)
+//     data: HashMap<Key, Value>,
+//     // Unique id for blocking operations
+//     waiter_id: WaiterId,
+//     // Watched keys are used for optimistic locking in transactions
+//     watched_keys: HashMap<Key, HashSet<usize>>,
+//     // Waiters (Clients) for XREAD stream operation
+//     stream_xread_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>, Vec<(u64, u64)>)>,
+//     // Waiters (Clients) for BLPOP list operation
+//     list_blpop_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, Vec<Key>)>,
+//     // Waiters (Clients) for WAIT operation
+//     wait_waiters: HashMap<WaiterId, (oneshot::Sender<Reply>, u64, u64)>,
+//     // Bytes of write commands propagated to replicas so far.
+//     master_repl_offset: u64,
+//     // Last replication offset acked by each replica, keyed by client id.
+//     replica_acks: HashMap<usize, u64>,
+// }
+// /// Channels
+// /// Client has open channel to receive replies from server
+// ///     - sender channel of <(Command, oneshot::Sender<Repl>)> for sending messages to server
+// ///     - reads incoming Repl inputs from the stream, these are Vec<Repl> for each read
+// ///     - writes data to the stream (Repl serialized to bytes)
+// ///     - receiver channel of <Command>, so if client is replica, master server can send commands
+enum FuckOff {}
