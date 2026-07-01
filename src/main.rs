@@ -1705,6 +1705,7 @@ async fn handle_client(
                         //let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
                         for input in inputs {
+                            println!("INPUT: {:?}", input);
                             let command = Command::from_resp(input).unwrap();
                             match (&command, &mut queue) {
                                 (Command::ReplconfListeningPort { port: _ }, _) => {
