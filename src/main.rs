@@ -788,6 +788,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             } => {
                 let timeout = command.block_timeout();
                 let replication_command = if command.is_replicatable() {
+                    store.pending_write_commands_for_wait = true;
                     Some(command.clone())
                 } else {
                     None
