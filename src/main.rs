@@ -1481,9 +1481,9 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
             }
             Some(inputs) => {
                 for input in inputs {
+                    let l = input.len();
                     // Count this command's bytes before replying, so a GETACK reports
                     // the offset that includes the GETACK command itself.
-                    ack_bytes += input.len();
                     match process_replica_message(&mut store_tx, input, ack_bytes).await {
                         Some(reply) => {
                             println!(
@@ -1494,6 +1494,7 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
                         }
                         _ => {}
                     };
+                    ack_bytes += l;
                 }
             }
         }
