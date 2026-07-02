@@ -248,6 +248,25 @@ impl Store {
         }
     }
 
+    fn command_set(&mut self, client_id: ClientId, cmd: &Command) -> TryExecuteResult {
+        if let Command::Set { key, value, ex, px } = cmd {
+            let ttl = match (ex, px) {
+                (Some(ex), _) => Some(Duration::from_secs(*ex)),
+                (_, Some(px)) => Some(Duration::from_millis(*px)),
+                _ => None,
+            };
+            let v = Value {
+                t: Instant::now(),
+                ttl,
+                value: PrimitiveValue::Str(value.clone()),
+            };
+            self.data.insert(key.clone(), v);
+            TryExecuteResult::Done(Resp::simple_string("OK"))
+        } else {
+            panic!("Not SET command");
+        }
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -789,6 +808,7 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 let timeout = command.block_timeout();
                 let replication_command = if command.is_replicatable() {
                     store.pending_write_commands_for_wait = true;
+                    store.master_ack += command.to_resp().unwrap().len() as u64;
                     Some(command.clone())
                 } else {
                     None
