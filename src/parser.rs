@@ -110,7 +110,7 @@ pub fn take_while<'a>(pred: impl Fn(u8) -> bool) -> impl Parser<'a, &'a [u8]> {
 pub fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
         let mut i = 0;
-        while i < input.len() - delimiter.len() {
+        while i <= input.len() - delimiter.len() {
             if input[i..].starts_with(delimiter) {
                 //let x = input.split_at(i); // debug
                 // println!("[take_until] 0: {:?}", x.0);
