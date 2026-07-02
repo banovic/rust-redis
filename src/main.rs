@@ -899,6 +899,11 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 // A newly connected replica is not an acknowledgement of pending writes,
                 // so it does not resolve any in-flight WAIT.
                 store.replicas.insert(client_id, replica_tx);
+                // Ask each replica for its offset; replies arrive asynchronously
+                // as Envelope::ReplconfAck and drive completion below.
+                for (_client_id, replica_tx) in &store.replicas {
+                    let _ = replica_tx.send((Command::ReplconfGetAck, None)).await;
+                }
             }
             // This is command execution on replica
             Envelope::Replicate { command } => {
@@ -1049,7 +1054,7 @@ async fn handle_client(
                 println!("Replica (master process, client connection handler) received command: {:?}", replicate_command);
                 if let Some((command, _reply_tx)) = replicate_command {
                     let x1 = write_command_to_stream(&mut stream, &command).await;
-                    println!("x1: {:?}", x1);
+                    //println!("x1: {:?}", x1);
                     // TODO
                     // if let Some(encoded_command) = command.to_resp().unwrap().to_bytes() {
                     //     println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
