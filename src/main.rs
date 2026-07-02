@@ -71,6 +71,7 @@ struct Value {
     value: PrimitiveValue,
 }
 
+type ClientId = usize;
 type WaiterId = usize;
 
 enum TryExecuteResult {
@@ -85,7 +86,7 @@ struct Store {
     // Since replicas are also clients of master (ie. sub-process inside same master process),
     // key is client id, and value is channel to that client/replica sub-process; channel works
     // with pair: command for replica and optional channel to send result back to master process.
-    replicas: HashMap<usize, mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>>,
+    replicas: HashMap<ClientId, mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>>,
     data: HashMap<Key, Value>,
     waiter_id: WaiterId,
     watched_keys: HashMap<Key, HashSet<usize>>,
@@ -96,9 +97,10 @@ struct Store {
     // replication offset they must have acked to count as caught up.
     wait_waiters: HashMap<WaiterId, (oneshot::Sender<Resp>, u64, u64)>,
     // Bytes of write commands propagated to replicas so far.
-    master_repl_offset: u64,
+    master_ack: u64,
     // Last replication offset acked by each replica, keyed by client id.
-    replica_acks: HashMap<usize, u64>,
+    replica_acks: HashMap<ClientId, u64>,
+    pending_write_commands_for_wait: bool,
 }
 
 impl Store {
@@ -112,20 +114,21 @@ impl Store {
             stream_xread_waiters: HashMap::new(),
             list_blpop_waiters: HashMap::new(),
             wait_waiters: HashMap::new(),
-            master_repl_offset: 0,
+            master_ack: 0,
             replica_acks: HashMap::new(),
+            pending_write_commands_for_wait: false,
         }
     }
 
     // How many replicas have acked an offset >= target. With no writes pending
     // (target == 0) every connected replica is caught up by definition.
-    fn count_acked(&self, target: u64) -> u64 {
-        if target == 0 {
+    fn count_acked(&self, master_ack: u64) -> u64 {
+        if master_ack == 0 {
             return self.replicas.len() as u64;
         }
         self.replica_acks
             .values()
-            .filter(|&&off| off >= target)
+            .filter(|&&replica_ack| replica_ack >= master_ack)
             .count() as u64
     }
 
@@ -697,9 +700,7 @@ impl Store {
                     )
                     .to_string(),
                 );
-                info.push_str(
-                    &format!("\nmaster_repl_offset:{}", self.master_repl_offset).to_string(),
-                );
+                info.push_str(&format!("\nmaster_repl_offset:{}", self.master_ack).to_string());
                 TryExecuteResult::Done(Resp::BulkString(info.as_bytes().to_vec()))
             }
 
@@ -715,6 +716,19 @@ impl Store {
                 numreplicas,
                 timeout,
             } => {
+                let current_replicas = self.count_acked(self.master_ack);
+                if current_replicas >= numreplicas {
+                    return TryExecuteResult::Done(Resp::Integer(current_replicas as i64));
+                }
+
+                if self.pending_write_commands_for_wait {
+                    // REPLCONF GETACK * to all replicas.
+                    // This will be done in calling function
+                    // return TryExecuteResult::WaitCommand((), (), ());
+                    // Clear flag, any new replicatable command will set flag again
+                    // self.pending_write_commands_for_wait = false;
+                }
+
                 self.waiter_id += 1;
                 TryExecuteResult::WaitCommand(self.waiter_id, numreplicas, timeout)
             }
@@ -825,28 +839,34 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                         });
                     }
                     TryExecuteResult::WaitCommand(waiter_id, numreplicas, timeout) => {
-                        // Offset replicas must reach to count as caught up. Captured before
-                        // sending GETACK so the GETACK itself doesn't move the goalpost.
-                        let target = store.master_repl_offset;
-                        if numreplicas == 0 || store.count_acked(target) >= numreplicas {
-                            let _ =
-                                reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
-                        } else {
-                            // Ask each replica for its offset; replies arrive asynchronously
-                            // as Envelope::ReplconfAck and drive completion below.
+                        if store.pending_write_commands_for_wait {
                             for (_client_id, replica_tx) in &store.replicas {
                                 let _ = replica_tx.send((Command::ReplconfGetAck, None)).await;
                             }
-                            store
-                                .wait_waiters
-                                .insert(waiter_id, (reply_channel, numreplicas, target));
-                            let duration = Duration::from_millis(timeout);
-                            let tx2 = tx.clone();
-                            tokio::spawn(async move {
-                                sleep(duration).await;
-                                let _ = tx2.send(Envelope::WaitCommandTimeout { waiter_id }).await;
-                            });
+                            store.pending_write_commands_for_wait = false;
                         }
+                        store
+                            .wait_waiters
+                            .insert(waiter_id, (reply_channel, numreplicas, store.master_ack));
+                        let duration = Duration::from_millis(timeout);
+                        let tx2 = tx.clone();
+                        tokio::spawn(async move {
+                            sleep(duration).await;
+                            let _ = tx2.send(Envelope::WaitCommandTimeout { waiter_id }).await;
+                        });
+                        // Offset replicas must reach to count as caught up. Captured before
+                        // sending GETACK so the GETACK itself doesn't move the goalpost.
+                        // let target = store.master_ack;
+                        // if numreplicas == 0 || store.count_acked(target) >= numreplicas {
+                        //     let _ =
+                        //         reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
+                        // } else {
+                        //     // Ask each replica for its offset; replies arrive asynchronously
+                        //     // as Envelope::ReplconfAck and drive completion below.
+                        //     for (_client_id, replica_tx) in &store.replicas {
+                        //         let _ = replica_tx.send((Command::ReplconfGetAck, None)).await;
+                        //     }
+                        // }
                     }
                 }
             }
@@ -899,11 +919,6 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 // A newly connected replica is not an acknowledgement of pending writes,
                 // so it does not resolve any in-flight WAIT.
                 store.replicas.insert(client_id, replica_tx);
-                // Ask each replica for its offset; replies arrive asynchronously
-                // as Envelope::ReplconfAck and drive completion below.
-                for (_client_id, replica_tx) in &store.replicas {
-                    let _ = replica_tx.send((Command::ReplconfGetAck, None)).await;
-                }
             }
             // This is command execution on replica
             Envelope::Replicate { command } => {
@@ -1516,7 +1531,6 @@ async fn b_handshake(stream: &mut TcpStream) -> Vec<Resp> {
 }
 async fn b_run_server_as_master() {}
 async fn b_run_server_as_replica() {}
-type ClientId = u32;
 async fn b_run_client(client_id: ClientId) {
     let mut is_replica = false;
     todo!()
