@@ -1192,24 +1192,24 @@ async fn process_replica_message(
     }
 }
 
-async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(Resp, usize)>> {
-    let mut buffer = [0; 1024];
-    let n = stream.read(&mut buffer).await.unwrap(); // +PONG
-    let read_inputs = if n == 0 {
-        // Client disconected
-        println!("[read] None");
-        None
-    } else {
-        let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
-        for resp in &inputs {
-            println!("[read][{}] {:?}", resp.len(), resp);
-        }
-        Some(inputs)
-    };
+// async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(Resp, usize)>> {
+//     let mut buffer = [0; 1024];
+//     let n = stream.read(&mut buffer).await.unwrap(); // +PONG
+//     let read_inputs = if n == 0 {
+//         // Client disconected
+//         println!("[read] None");
+//         None
+//     } else {
+//         let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
+//         for resp in &inputs {
+//             println!("[read][{}] {:?}", resp.len(), resp);
+//         }
+//         Some(inputs)
+//     };
 
-    //read_inputs
-    todo!()
-}
+//     //read_inputs
+//     todo!()
+// }
 
 async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     let mut buffer = [0; 1024];
@@ -1329,7 +1329,7 @@ async fn client_handshake(stream: &mut TcpStream) -> (bool, Vec<Resp>) {
 async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, VecDeque<Resp>) {
     // Handshake: 1) PING - PONG
     let _ = write_command_to_stream(stream, &Command::Ping { message: None }).await;
-    let _ = read_inputs_from_stream(stream).await;
+    let _ = read_resp_from_stream(stream).await;
 
     // Handshake: 2) REPLCONF
     // let reply = Resp::Array(vec![
@@ -1338,7 +1338,7 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     //     Resp::BulkString(format!("{}", port).as_bytes().to_vec()),
     // ]);
     let _ = write_command_to_stream(stream, &Command::ReplconfListeningPort { port }).await;
-    let _ = read_inputs_from_stream(stream).await;
+    let _ = read_resp_from_stream(stream).await;
 
     // Handshake: 3) REPLCONF
     // let reply = Resp::Array(vec![
@@ -1350,7 +1350,7 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
         capabilites: vec![b"psync2".to_vec()],
     };
     let _ = write_command_to_stream(stream, &replconf2).await;
-    let _ = read_inputs_from_stream(stream).await;
+    let _ = read_resp_from_stream(stream).await;
 
     // Handshake: 4) PSYNC
     // let reply = Resp::Array(vec![
@@ -1473,17 +1473,17 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
     }
 
     loop {
-        let read_inputs = read_inputs_from_stream(&mut stream).await;
+        let read_inputs = read_resp_from_stream(&mut stream).await;
         match read_inputs {
             None => {
                 println!("Master disconnected");
                 break;
             }
             Some(inputs) => {
-                for (input, len) in inputs {
+                for input in inputs {
                     // Count this command's bytes before replying, so a GETACK reports
                     // the offset that includes the GETACK command itself.
-                    ack_bytes += len;
+                    ack_bytes += input.len();
                     match process_replica_message(&mut store_tx, input, ack_bytes).await {
                         Some(reply) => {
                             println!(
