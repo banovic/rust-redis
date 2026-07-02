@@ -1048,6 +1048,8 @@ async fn handle_client(
                 // (this is all happening on master, this is process inside master / server)
                 println!("Replica (master process, client connection handler) received command: {:?}", replicate_command);
                 if let Some((command, _reply_tx)) = replicate_command {
+                    let x1 = write_command_to_stream(&mut stream, &command).await;
+                    println!("x1: {:?}", x1);
                     // TODO
                     // if let Some(encoded_command) = command.to_resp().unwrap().to_bytes() {
                     //     println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
