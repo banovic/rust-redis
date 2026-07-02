@@ -408,7 +408,7 @@ impl Command {
         }
     }
 
-    pub fn from_resp(resp: Resp) -> Option<Command> {
+    pub fn from_resp(resp: &Resp) -> Option<Command> {
         print!("Command from resp: {:?}", resp);
         if let Resp::Array(els) = resp {
             assert!(els.len() > 0);
@@ -629,6 +629,40 @@ impl Command {
                 resp.push(Resp::bulk_string("REPLCONF"));
                 resp.push(Resp::bulk_string("GETACK"));
                 resp.push(Resp::bulk_string("*"));
+                Some(Resp::Array(resp))
+            }
+            Command::ReplconfListeningPort { port } => {
+                let mut resp: Vec<Resp> = Vec::new();
+                resp.push(Resp::bulk_string("REPLCONF"));
+                resp.push(Resp::bulk_string("listening-port"));
+                resp.push(Resp::bulk_string(&port.to_string()));
+                Some(Resp::Array(resp))
+            }
+            Command::ReplconfCapa { capabilites } => {
+                let mut resp: Vec<Resp> = Vec::new();
+                resp.push(Resp::bulk_string("REPLCONF"));
+                resp.push(Resp::bulk_string("capa"));
+                for c in capabilites {
+                    resp.push(Resp::BulkString(c.clone()));
+                }
+                Some(Resp::Array(resp))
+            }
+            Command::Psync {
+                replication_id,
+                offset,
+            } => {
+                let mut resp: Vec<Resp> = Vec::new();
+                resp.push(Resp::bulk_string("PSYNC"));
+                resp.push(Resp::bulk_string(replication_id));
+                resp.push(Resp::bulk_string(&offset.to_string()));
+                Some(Resp::Array(resp))
+            }
+            Command::Ping { message } => {
+                let mut resp: Vec<Resp> = Vec::new();
+                resp.push(Resp::bulk_string("PING"));
+                if let Some(msg) = message {
+                    resp.push(Resp::BulkString(msg.clone()));
+                }
                 Some(Resp::Array(resp))
             }
             _ => None,
