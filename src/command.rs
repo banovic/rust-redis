@@ -179,6 +179,9 @@ pub enum Command {
         numreplicas: u64,
         timeout: u64,
     },
+    ConfigGet {
+        parameter: Bytes,
+    },
 }
 
 impl Command {
@@ -600,6 +603,19 @@ impl Command {
                     numreplicas: els[1].get_str().unwrap().parse().unwrap(),
                     timeout: els[2].get_str().unwrap().parse().unwrap(),
                 }),
+                "CONFIG" => {
+                    if let Some(subcommand) = els[1].get_str() {
+                        if subcommand == "GET" && els.len() == 3 {
+                            Some(Command::ConfigGet {
+                                parameter: els[2].get_bytes().unwrap(),
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             }
         } else {

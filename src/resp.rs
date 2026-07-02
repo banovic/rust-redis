@@ -217,7 +217,7 @@ fn parse_single_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Option<Resp>
 pub fn parse_resp<'a>(input: ParserInput<'a>) -> ParseResult<'a, Vec<Resp>> {
     let mut resp = Vec::new();
     let mut next_input = input;
-    println!("[inpt] {:?}", input);
+
     loop {
         match parse_single_resp(next_input) {
             Ok((Some(new_resp), new_input)) => {

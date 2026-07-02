@@ -101,10 +101,12 @@ struct Store {
     // Last replication offset acked by each replica, keyed by client id.
     replica_acks: HashMap<ClientId, u64>,
     pending_write_commands_for_wait: bool,
+    dir: Option<String>,
+    dbfilename: Option<String>,
 }
 
 impl Store {
-    fn new(is_replica: bool) -> Self {
+    fn new(is_replica: bool, dir: Option<String>, dbfilename: Option<String>) -> Self {
         Self {
             is_replica,
             replicas: HashMap::new(),
@@ -117,6 +119,8 @@ impl Store {
             master_ack: 0,
             replica_acks: HashMap::new(),
             pending_write_commands_for_wait: false,
+            dir,
+            dbfilename,
         }
     }
 
@@ -265,6 +269,20 @@ impl Store {
         } else {
             panic!("Not SET command");
         }
+    }
+
+    fn command_config_get(&self, parameter: &Bytes) -> TryExecuteResult {
+        let value = match &parameter[..] {
+            b"dir" => &self.dir,
+            b"dbfilename" => &self.dbfilename,
+            _ => &None,
+        };
+        let mut params: Vec<Resp> = Vec::new();
+        if let Some(v) = value {
+            params.push(Resp::BulkString(parameter.clone()));
+            params.push(Resp::BulkString(v.as_bytes().to_vec()));
+        }
+        TryExecuteResult::Done(Resp::Array(params))
     }
 
     // Pure, sync
@@ -752,6 +770,8 @@ impl Store {
                 TryExecuteResult::WaitCommand(self.waiter_id, numreplicas, timeout)
             }
 
+            Command::ConfigGet { parameter } => self.command_config_get(&parameter),
+
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
     }
@@ -1089,16 +1109,7 @@ async fn handle_client(
                 // (this is all happening on master, this is process inside master / server)
                 println!("Replica (master process, client connection handler) received command: {:?}", replicate_command);
                 if let Some((command, _reply_tx)) = replicate_command {
-                    let x1 = write_command_to_stream(&mut stream, &command).await;
-                    //println!("x1: {:?}", x1);
-                    // TODO
-                    // if let Some(encoded_command) = command.to_resp().unwrap().to_bytes() {
-                    //     println!("Replica (master process, client connection handler) sending encoded command: {:?}", encoded_command);
-                    //     let x1 = stream.write_all(&encoded_command).await;
-                    //     println!("Result x1: {:?}", x1);
-                    //     let x2 = stream.flush().await;
-                    //     println!("Result x2: {:?}", x2);
-                    // }
+                    write_command_to_stream(&mut stream, &command).await;
                 }
             }
         }
@@ -1132,18 +1143,6 @@ async fn execute_command(
     reply
 }
 
-/// Simple program to greet a person
-#[derive(clap::Parser, Debug)]
-struct Args {
-    /// Port on which to start
-    #[arg(long)]
-    port: Option<u16>,
-
-    /// Replica
-    #[arg(long)]
-    replicaof: Option<String>,
-}
-
 // function that processes messages replica receovis from master
 async fn process_replica_message(
     store_tx: &mpsc::Sender<Envelope>,
@@ -1162,17 +1161,6 @@ async fn process_replica_message(
                 Resp::BulkString("ACK".as_bytes().to_vec()),
                 Resp::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
             ])),
-            // Command::Get { key: _ } => {
-            //     let (rsp_tx, rsp_rx) = oneshot::channel::<Reply>();
-            //     let _ = store_tx
-            //         .send(Envelope::FromMaster {
-            //             command,
-            //             reply_channel: rsp_tx,
-            //         })
-            //         .await;
-            //     let reply = rsp_rx.await.unwrap();
-            //     Some(reply)
-            // }
             _ => {
                 let _ = store_tx
                     .send(Envelope::Replicate {
@@ -1184,32 +1172,9 @@ async fn process_replica_message(
         };
         reply
     } else {
-        // println!(
-        //     "[PROCESS_REPLICA_MESSAGE] could not decode command from input: {:?}",
-        //     input
-        // );
         None
     }
 }
-
-// async fn read_inputs_from_stream(stream: &mut TcpStream) -> Option<Vec<(Resp, usize)>> {
-//     let mut buffer = [0; 1024];
-//     let n = stream.read(&mut buffer).await.unwrap(); // +PONG
-//     let read_inputs = if n == 0 {
-//         // Client disconected
-//         println!("[read] None");
-//         None
-//     } else {
-//         let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
-//         for resp in &inputs {
-//             println!("[read][{}] {:?}", resp.len(), resp);
-//         }
-//         Some(inputs)
-//     };
-
-//     //read_inputs
-//     todo!()
-// }
 
 async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     let mut buffer = [0; 1024];
@@ -1227,18 +1192,15 @@ async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     };
 
     read_inputs
-    //todo!()
 }
 
 async fn write_resp_to_stream(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
-    //let out = encode_reply(reply);
     let result = stream.write_all(&resp.to_bytes()[..]).await;
     let _ = stream.flush();
     result
 }
 
 async fn write_command_to_stream(stream: &mut TcpStream, command: &Command) -> std::io::Result<()> {
-    //let out = encode_reply(reply);
     let resp = command.to_resp().unwrap();
     let result = stream.write_all(&resp.to_bytes()[..]).await;
     let _ = stream.flush();
@@ -1332,20 +1294,10 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     let _ = read_resp_from_stream(stream).await;
 
     // Handshake: 2) REPLCONF
-    // let reply = Resp::Array(vec![
-    //     Resp::BulkString("REPLCONF".as_bytes().to_vec()),
-    //     Resp::BulkString("listening-port".as_bytes().to_vec()),
-    //     Resp::BulkString(format!("{}", port).as_bytes().to_vec()),
-    // ]);
     let _ = write_command_to_stream(stream, &Command::ReplconfListeningPort { port }).await;
     let _ = read_resp_from_stream(stream).await;
 
     // Handshake: 3) REPLCONF
-    // let reply = Resp::Array(vec![
-    //     Resp::BulkString("REPLCONF".as_bytes().to_vec()),
-    //     Resp::BulkString("capa".as_bytes().to_vec()),
-    //     Resp::BulkString("psync2".as_bytes().to_vec()),
-    // ]);
     let replconf2 = Command::ReplconfCapa {
         capabilites: vec![b"psync2".to_vec()],
     };
@@ -1353,19 +1305,11 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     let _ = read_resp_from_stream(stream).await;
 
     // Handshake: 4) PSYNC
-    // let reply = Resp::Array(vec![
-    //     Resp::BulkString("PSYNC".as_bytes().to_vec()),
-    //     Resp::BulkString("?".as_bytes().to_vec()),
-    //     Resp::BulkString("-1".as_bytes().to_vec()),
-    // ]);
     let psync = Command::Psync {
         replication_id: "?".to_string(),
         offset: -1,
     };
     let _ = write_command_to_stream(stream, &psync).await;
-    //    let _ = read_inputs_from_stream(stream).await;
-    //    let _ = write_resp(&mut stream, &reply).await;
-    //let _ = read_inputs_from_stream(&mut stream).await;
 
     // FULLRESYNC response tO PSYNC and RDB file, 3rd message can be also in these inputs
     let mut queue = VecDeque::new();
@@ -1380,7 +1324,6 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     }
 
     // Remove first 2 resp elements (FULLRESYNC command as response to PSYNC) and RDB file
-    //println!("Handshake phase 2 start, input queue: {:?}", queue);
 
     // FULLRESYNC
     queue.pop_front();
@@ -1388,8 +1331,6 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     // Rdb file
     queue.pop_front();
 
-    //println!("Handshake phase 2 complete, starting listening and metering on this connection");
-    //println!("Handshake phase 2 finish, input queue: {:?}", queue);
     (true, queue)
 }
 
@@ -1397,57 +1338,10 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
 async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelope>) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
-    // // Handshake: 1) PING - PONG
-    // let reply = Resp::Array(vec![Resp::BulkString("PING".as_bytes().to_vec())]);
-    // let _ = write_resp(&mut stream, &reply).await;
-    // let _ = read_inputs_from_stream(&mut stream).await;
-
-    // // Handshake: 2) REPLCONF
-    // let reply = Resp::Array(vec![
-    //     Resp::BulkString("REPLCONF".as_bytes().to_vec()),
-    //     Resp::BulkString("listening-port".as_bytes().to_vec()),
-    //     Resp::BulkString(format!("{}", port).as_bytes().to_vec()),
-    // ]);
-    // let _ = write_resp(&mut stream, &reply).await;
-    // let _ = read_inputs_from_stream(&mut stream).await;
-
-    // // Handshake: 3) REPLCONF
-    // let reply = Resp::Array(vec![
-    //     Resp::BulkString("REPLCONF".as_bytes().to_vec()),
-    //     Resp::BulkString("capa".as_bytes().to_vec()),
-    //     Resp::BulkString("psync2".as_bytes().to_vec()),
-    // ]);
-    // let _ = write_resp(&mut stream, &reply).await;
-    // let _ = read_inputs_from_stream(&mut stream).await;
-
-    // // Handshake: 4) PSYNC
-    // let reply = Resp::Array(vec![
-    //     Resp::BulkString("PSYNC".as_bytes().to_vec()),
-    //     Resp::BulkString("?".as_bytes().to_vec()),
-    //     Resp::BulkString("-1".as_bytes().to_vec()),
-    // ]);
-    // let _ = write_resp(&mut stream, &reply).await;
-    // //let _ = read_inputs_from_stream(&mut stream).await;
-
-    // // FULLRESYNC response tO PSYNC and RDB file, 3rd message can be also in these inputs
-    // let mut inputs_queue = VecDeque::new();
-    // loop {
-    //     let new_inputs = read_inputs_from_stream(&mut stream).await.unwrap();
-    //     inputs_queue.append(&mut VecDeque::from(new_inputs));
-    //     if inputs_queue.len() >= 2 {
-    //         break;
-    //     }
-    // }
-
-    // println!("Handshake phase 2 start, input queue: {:?}", inputs_queue);
-
-    // // FULLRESYNC
-    // inputs_queue.pop_front();
-
-    // // Rdb file
-    // inputs_queue.pop_front();
+    // Handshake
     let (is_handshake_success, mut inputs_queue) =
         replica_server_handshake(&mut stream, port).await;
+
     println!("Handshake phase 2 complete, starting listening and metering on this connection");
     println!(
         "Handshake phase 2 finish, success: {:?}",
@@ -1470,6 +1364,7 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
             }
             _ => {}
         };
+        // Count ACK after command is run
         ack_bytes += l;
     }
 
@@ -1483,8 +1378,6 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
             Some(inputs) => {
                 for input in inputs {
                     let l = input.len();
-                    // Count this command's bytes before replying, so a GETACK reports
-                    // the offset that includes the GETACK command itself.
                     match process_replica_message(&mut store_tx, input, ack_bytes).await {
                         Some(reply) => {
                             println!(
@@ -1495,11 +1388,32 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
                         }
                         _ => {}
                     };
+                    // Count ACK after command is run
                     ack_bytes += l;
                 }
             }
         }
     }
+}
+
+/// Parse CLI args
+#[derive(clap::Parser, Debug)]
+struct Args {
+    /// Port on which to start
+    #[arg(long)]
+    port: Option<u16>,
+
+    /// Replica
+    #[arg(long)]
+    replicaof: Option<String>,
+
+    /// dir
+    #[arg(long)]
+    dir: Option<String>,
+
+    /// dbfilename
+    #[arg(long)]
+    dbfilename: Option<String>,
 }
 
 #[tokio::main]
@@ -1518,7 +1432,7 @@ async fn main() {
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
-    let store = Store::new(is_replica);
+    let store = Store::new(is_replica, args.dir, args.dbfilename);
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     if let Some(addr) = master_addr {
