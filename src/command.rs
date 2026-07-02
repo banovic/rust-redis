@@ -409,7 +409,7 @@ impl Command {
     }
 
     pub fn from_resp(resp: &Resp) -> Option<Command> {
-        print!("Command from resp: {:?}", resp);
+        //print!("Command from resp: {:?}", resp);
         if let Resp::Array(els) = resp {
             assert!(els.len() > 0);
 
