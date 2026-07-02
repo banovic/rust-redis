@@ -1461,15 +1461,16 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
     // Optional other inputs:
     while let Some(resp) = inputs_queue.pop_front() {
         println!("Post-handshake, first input: {:?}", resp);
+        let l = resp.len();
         // Count this command's bytes before replying, so a GETACK reports the
         // offset that includes the GETACK command itself.
-        ack_bytes += resp.len();
         match process_replica_message(&mut store_tx, resp, ack_bytes).await {
             Some(reply) => {
                 let _ = write_resp(&mut stream, &reply).await;
             }
             _ => {}
         };
+        ack_bytes += l;
     }
 
     loop {
