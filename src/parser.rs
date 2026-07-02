@@ -121,7 +121,10 @@ pub fn take_until<'a>(delimiter: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
         }
 
         Err(ParseError {
-            message: format!("expected to match limit: {:?}, but haven't", delimiter),
+            message: format!(
+                "expected to match limit: {:?}, but haven't: input: {:?}",
+                delimiter, input
+            ),
         })
     }
 }
