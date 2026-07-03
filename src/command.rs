@@ -182,6 +182,9 @@ pub enum Command {
     ConfigGet {
         parameter: Bytes,
     },
+    Keys {
+        pattern: String,
+    },
 }
 
 impl Command {
@@ -616,6 +619,9 @@ impl Command {
                         None
                     }
                 }
+                "KEYS" => Some(Command::Keys {
+                    pattern: els[1].get_str().unwrap().to_string(),
+                }),
                 _ => None,
             }
         } else {

@@ -42,6 +42,8 @@ mod resp;
 use resp::Resp;
 mod command;
 use command::Command;
+mod rdb;
+use rdb::Rdb;
 
 use crate::PrimitiveValue::List;
 use crate::command::{XreadStreamIdInput, next_stream_id};
@@ -103,10 +105,28 @@ struct Store {
     pending_write_commands_for_wait: bool,
     dir: Option<String>,
     dbfilename: Option<String>,
+    rdb: Rdb,
 }
 
 impl Store {
-    fn new(is_replica: bool, dir: Option<String>, dbfilename: Option<String>) -> Self {
+    async fn new(is_replica: bool, dir: Option<String>, dbfilename: Option<String>) -> Self {
+        let rdb = {
+            if dir.is_some() && dbfilename.is_some() {
+                let d = dir.clone().unwrap();
+                let f = dbfilename.clone().unwrap();
+                let filename = format!("{}/{}", d, f);
+                match Rdb::read_from_file(&filename).await {
+                    Ok(rdb) => rdb,
+                    _ => {
+                        println!("Failed to read RDB file from: {}", filename);
+                        Rdb::new()
+                    }
+                }
+            } else {
+                Rdb::new()
+            }
+        };
+
         Self {
             is_replica,
             replicas: HashMap::new(),
@@ -121,6 +141,7 @@ impl Store {
             pending_write_commands_for_wait: false,
             dir,
             dbfilename,
+            rdb,
         }
     }
 
@@ -283,6 +304,14 @@ impl Store {
             params.push(Resp::BulkString(v.as_bytes().to_vec()));
         }
         TryExecuteResult::Done(Resp::Array(params))
+    }
+
+    fn command_keys(&self, pattern: &String) -> TryExecuteResult {
+        let mut keys: Vec<Resp> = Vec::new();
+        for key in self.rdb.keys() {
+            keys.push(Resp::bulk_string(key.as_str()));
+        }
+        TryExecuteResult::Done(Resp::Array(keys))
     }
 
     // Pure, sync
@@ -771,6 +800,8 @@ impl Store {
             }
 
             Command::ConfigGet { parameter } => self.command_config_get(&parameter),
+
+            Command::Keys { pattern } => self.command_keys(&pattern),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
@@ -1432,7 +1463,7 @@ async fn main() {
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
-    let store = Store::new(is_replica, args.dir, args.dbfilename);
+    let store = Store::new(is_replica, args.dir, args.dbfilename).await;
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     if let Some(addr) = master_addr {

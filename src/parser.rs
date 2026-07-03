@@ -63,6 +63,22 @@ pub fn tag<'a>(expected: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     }
 }
 
+/// Read `tag_str` where tag is given as str.
+pub fn tag_str<'a>(expected: &str) -> impl Parser<'a, &'a str> {
+    move |input: ParserInput<'a>| {
+        // println!("[tag] input: {:?}", input);
+        // println!("[tag] expected: {:?}", expected);
+        if input.starts_with(&expected.as_bytes().to_vec()) {
+            let x = input.split_at(expected.len());
+            Ok((str::from_utf8(x.0).unwrap(), x.1))
+        } else {
+            Err(ParseError {
+                message: format!("[tag_str] no tag: {:?} found", expected),
+            })
+        }
+    }
+}
+
 pub fn tag_no_case<'a>(expected: &'static [u8]) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
         let n = expected.len();
@@ -274,6 +290,67 @@ pub fn opt<'a, T: Debug>(p: impl Parser<'a, T>) -> impl Parser<'a, Option<T>> {
     }
 }
 
+/// `many0` combinator, it always suceeds, it matches 0 or more times.
+pub fn many0<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
+    move |input: ParserInput<'a>| {
+        let mut matches = Vec::new();
+        //let mut last_error: Option<ParseError> = None;
+        let mut rest = input;
+        loop {
+            match p.parse(rest) {
+                Ok((r, new_rest)) => {
+                    matches.push(r);
+                    rest = new_rest;
+                }
+                Err(e) => {
+                    //last_error = Some(e);
+                    break;
+                }
+            }
+        }
+
+        Ok((matches, rest))
+    }
+}
+
+/// `many1` combinator, it must match at least once.
+pub fn many1<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
+    move |input: ParserInput<'a>| {
+        let mut matches = Vec::new();
+        let mut last_error: Option<ParseError> = None;
+        let mut rest = input;
+        loop {
+            match p.parse(rest) {
+                Ok((r, new_rest)) => {
+                    matches.push(r);
+                    rest = new_rest;
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    break;
+                }
+            }
+        }
+
+        if matches.len() > 1 {
+            return Ok((matches, rest));
+        }
+
+        if matches.len() == 0 {
+            return Err(ParseError {
+                message: format!("[many1] no matches (0)"),
+            });
+        }
+
+        match last_error {
+            Some(e) => Err(e),
+            _ => Err(ParseError {
+                message: format!("[many1] unreachable?"),
+            }),
+        }
+    }
+}
+
 pub fn recognize<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, &'a [u8]> {
     move |input: ParserInput<'a>| {
         let (_, rest) = p.parse(input)?;
@@ -331,5 +408,96 @@ where
             }),
         }?;
         Ok((n, rest))
+    }
+}
+
+// Length-Encoded (LE) integer
+pub fn le_integer<'a>() -> impl Parser<'a, u64> {
+    move |input: ParserInput<'a>| {
+        let first = input[0];
+        match (first & 0b1100_0000) >> 6 {
+            0b00 => {
+                let r = (first & 0b0011_1111) as u64;
+                Ok((r, &input[1..]))
+            }
+            0b01 => {
+                assert!(input.len() >= 2);
+                let a = first & 0b0011_1111;
+                let b = input[1];
+                let r = ((a as u64) << 8) | (b as u64);
+                Ok((r, &input[2..]))
+            }
+            0b10 => {
+                assert!(input.len() >= 5);
+                let r = ((input[1] as u64) << 24)
+                    | ((input[2] as u64) << 16)
+                    | ((input[3] as u64) << 8)
+                    | (input[4] as u64);
+                Ok((r, &input[5..]))
+            }
+            _ => Err(ParseError {
+                message: format!("[le_integer] unknown length prefix: {:?}", first),
+            }),
+        }
+    }
+}
+
+// Length-Encoded (LE) string; this can be more complex than le_integer()
+pub fn le_string<'a>() -> impl Parser<'a, String> {
+    move |input: ParserInput<'a>| {
+        let first = input[0];
+        match (first & 0b1100_0000) >> 6 {
+            0b00 => {
+                let start = 1;
+                let length = (first & 0b0011_1111) as usize;
+                let end = start + length;
+                assert!(input.len() >= end);
+                let s = String::from_utf8(input[start..end].to_vec()).unwrap();
+                Ok((s, &input[end..]))
+            }
+            0b01 => {
+                let start = 2;
+                let a = first & 0b0011_1111;
+                let b = input[1];
+                let length = ((a as usize) << 8) | (b as usize);
+                let end = start + length;
+                assert!(input.len() >= end);
+                let s = String::from_utf8(input[start..end].to_vec()).unwrap();
+                Ok((s, &input[end..]))
+            }
+            0b10 => {
+                let start = 5;
+                assert!(input.len() >= 5);
+                let length = ((input[1] as usize) << 24)
+                    | ((input[2] as usize) << 16)
+                    | ((input[3] as usize) << 8)
+                    | (input[4] as usize);
+                let end = start + length;
+                assert!(input.len() >= end);
+                let s = String::from_utf8(input[start..end].to_vec()).unwrap();
+                Ok((s, &input[end..]))
+            }
+            0b11 if first == 0b1100_0000 => {
+                // String is integer of length 1
+                assert!(input.len() >= 2);
+                let s = String::from_utf8(vec![input[1]]).unwrap();
+                Ok((s, &input[2..]))
+            }
+            0b11 if first == 0b1100_0001 => {
+                // String is integer of length 2
+                assert!(input.len() >= 3);
+                let s = String::from_utf8(vec![input[2], input[1]]).unwrap();
+                Ok((s, &input[3..]))
+            }
+            0b11 if first == 0b1100_0010 => {
+                // String is integer of length 4
+                assert!(input.len() >= 5);
+                let s = String::from_utf8(vec![input[4], input[3], input[2], input[1]]).unwrap();
+                Ok((s, &input[5..]))
+            }
+            _ => Err(ParseError {
+                message: format!("[le_string] unknown length prefix: {:?}", first),
+            }),
+        }
     }
 }
