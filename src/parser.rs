@@ -501,3 +501,63 @@ pub fn le_string<'a>() -> impl Parser<'a, String> {
         }
     }
 }
+
+// Length-Encoded (LE) bytes; similar to le_string() but return raw data
+pub fn le_bytes<'a>() -> impl Parser<'a, Vec<u8>> {
+    move |input: ParserInput<'a>| {
+        let first = input[0];
+        match (first & 0b1100_0000) >> 6 {
+            0b00 => {
+                let start = 1;
+                let length = (first & 0b0011_1111) as usize;
+                let end = start + length;
+                assert!(input.len() >= end);
+                let b = input[start..end].to_vec();
+                Ok((b, &input[end..]))
+            }
+            0b01 => {
+                let start = 2;
+                let a = first & 0b0011_1111;
+                let b = input[1];
+                let length = ((a as usize) << 8) | (b as usize);
+                let end = start + length;
+                assert!(input.len() >= end);
+                let b = input[start..end].to_vec();
+                Ok((b, &input[end..]))
+            }
+            0b10 => {
+                let start = 5;
+                assert!(input.len() >= 5);
+                let length = ((input[1] as usize) << 24)
+                    | ((input[2] as usize) << 16)
+                    | ((input[3] as usize) << 8)
+                    | (input[4] as usize);
+                let end = start + length;
+                assert!(input.len() >= end);
+                let b = input[start..end].to_vec();
+                Ok((b, &input[end..]))
+            }
+            0b11 if first == 0b1100_0000 => {
+                // integer of length 1
+                assert!(input.len() >= 2);
+                let b = vec![input[1]];
+                Ok((b, &input[2..]))
+            }
+            0b11 if first == 0b1100_0001 => {
+                // integer of length 2
+                assert!(input.len() >= 3);
+                let b = vec![input[2], input[1]];
+                Ok((b, &input[3..]))
+            }
+            0b11 if first == 0b1100_0010 => {
+                // integer of length 4
+                assert!(input.len() >= 5);
+                let b = vec![input[4], input[3], input[2], input[1]];
+                Ok((b, &input[5..]))
+            }
+            _ => Err(ParseError {
+                message: format!("[le_bytes] unknown length prefix: {:?}", first),
+            }),
+        }
+    }
+}

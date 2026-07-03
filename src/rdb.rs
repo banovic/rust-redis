@@ -2,7 +2,10 @@ use std::{collections::HashMap, io::Error};
 
 use tokio::fs;
 
-use crate::parser::*;
+use crate::{
+    parser::*,
+    types::{Bytes, Key},
+};
 
 #[derive(Debug)]
 pub enum RdbEntryExpiration {
@@ -14,8 +17,8 @@ pub enum RdbEntryExpiration {
 #[derive(Debug)]
 pub struct RdbEntry {
     encoding: u8,
-    name: String,
-    value: String,
+    name: Bytes,
+    value: Bytes,
     expire: RdbEntryExpiration,
 }
 
@@ -27,7 +30,7 @@ pub struct Rdb {
 fn parse_rdb_entry<'a>() -> impl Parser<'a, RdbEntry> {
     move |input: ParserInput<'a>| {
         if let Ok(((encoding, name, value), rest)) =
-            and!(byte(0x00), le_string(), le_string()).parse(input)
+            and!(byte(0x00), le_bytes(), le_bytes()).parse(input)
         {
             return Ok((
                 RdbEntry {
@@ -41,7 +44,7 @@ fn parse_rdb_entry<'a>() -> impl Parser<'a, RdbEntry> {
         }
 
         if let Ok(((_, expire, encoding, name, value), rest)) =
-            and!(byte(0xFC), take(8), byte(0x00), le_string(), le_string()).parse(input)
+            and!(byte(0xFC), take(8), byte(0x00), le_bytes(), le_bytes()).parse(input)
         {
             return Ok((
                 RdbEntry {
@@ -57,7 +60,7 @@ fn parse_rdb_entry<'a>() -> impl Parser<'a, RdbEntry> {
         }
 
         if let Ok(((_, expire, encoding, name, value), rest)) =
-            and!(byte(0xFD), take(4), byte(0x00), le_string(), le_string()).parse(input)
+            and!(byte(0xFD), take(4), byte(0x00), le_bytes(), le_bytes()).parse(input)
         {
             return Ok((
                 RdbEntry {
@@ -161,7 +164,22 @@ impl Rdb {
         Ok(Rdb { data })
     }
 
-    pub fn keys(&self) -> Vec<String> {
+    pub fn keys(&self) -> Vec<Bytes> {
         self.data.iter().map(|e| e.name.clone()).collect()
+    }
+
+    pub fn get(&self, key: &Key) -> Option<Bytes> {
+        for RdbEntry {
+            encoding: _,
+            name,
+            value,
+            expire: _,
+        } in &self.data
+        {
+            if name == &key.0 {
+                return Some(value.clone());
+            }
+        }
+        None
     }
 }

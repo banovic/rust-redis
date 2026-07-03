@@ -309,9 +309,16 @@ impl Store {
     fn command_keys(&self, pattern: &String) -> TryExecuteResult {
         let mut keys: Vec<Resp> = Vec::new();
         for key in self.rdb.keys() {
-            keys.push(Resp::bulk_string(key.as_str()));
+            keys.push(Resp::BulkString(key));
         }
         TryExecuteResult::Done(Resp::Array(keys))
+    }
+
+    fn command_get(&self, key: &Key) -> TryExecuteResult {
+        match self.rdb.get(key) {
+            Some(value) => TryExecuteResult::Done(Resp::BulkString(value)),
+            None => TryExecuteResult::Done(Resp::NullBulkString),
+        }
     }
 
     // Pure, sync
@@ -338,22 +345,22 @@ impl Store {
                 TryExecuteResult::Done(Resp::simple_string("OK"))
             }
 
-            Command::Get { key } => match self.data.get(&key) {
-                Some(Value {
-                    t,
-                    ttl,
-                    value: PrimitiveValue::Str(value),
-                }) => match ttl {
-                    None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
-                    Some(duration) if *t + *duration < Instant::now() => {
-                        TryExecuteResult::Done(Resp::NullBulkString)
-                    }
-                    Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
-                },
-                Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
-                None => TryExecuteResult::Done(Resp::NullBulkString),
-            },
-
+            Command::Get { key } => self.command_get(&key),
+            // match self.data.get(&key) {
+            //     Some(Value {
+            //         t,
+            //         ttl,
+            //         value: PrimitiveValue::Str(value),
+            //     }) => match ttl {
+            //         None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+            //         Some(duration) if *t + *duration < Instant::now() => {
+            //             TryExecuteResult::Done(Resp::NullBulkString)
+            //         }
+            //         Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+            //     },
+            //     Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
+            //     None => TryExecuteResult::Done(Resp::NullBulkString),
+            // },
             Command::Watch { keys } => {
                 for key in keys {
                     self.watched_keys
