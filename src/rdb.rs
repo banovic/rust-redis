@@ -89,23 +89,35 @@ impl Rdb {
 
         // Read header: REDIS + 4 bytes version
         let ((redis, version), rest) = and!(tag_str("REDIS"), take(4)).parse(input).unwrap();
+        println!("[RDB] REDIS            : {}", redis);
+        println!("[RDB] VERSION          : {:?}", version);
 
         // Metadata section, starts with FA
         let (metadata_section, rest) = byte(0xFA).parse(rest).unwrap();
+        println!("[RDB] MD Section       : {}", metadata_section);
         let (metadata_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
+        println!("[RDB] MD KVs           : {:?}", metadata_kvs);
 
         // Database section, starts with FE
         let (db_section, rest) = byte(0xFE).parse(rest).unwrap();
+        println!("[RDB] DB Section       : {:?}", db_section);
         let (db_index, rest) = le_integer().parse(rest).unwrap();
+        println!("[RDB] DB Index         : {:?}", db_index);
         let (db_hash_section, rest) = byte(0xFB).parse(rest).unwrap();
+        println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
         let (db_kvs_size, rest) = le_integer().parse(rest).unwrap();
+        println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
         let (db_expires_size, rest) = le_integer().parse(rest).unwrap();
+        println!("[RDB] DB expires size  : {:?}", db_expires_size);
         //let (db_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
         let (db_entries, rest) = many0(parse_rdb_entry()).parse(rest).unwrap();
+        println!("[RDB] DB entries       : {:?}", db_entries);
 
         // End of file section
         let (eof_section, rest) = byte(0xFF).parse(rest).unwrap();
+        println!("[RDB] End Section      : {:?}", eof_section);
         let (crc64, rest) = take(8).parse(rest).unwrap();
+        println!("[RDB] CRC64            : {:?}", crc64);
 
         Ok(Rdb { data: db_entries })
     }
