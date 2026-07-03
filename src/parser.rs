@@ -41,7 +41,7 @@ pub fn byte<'a>(b: u8) -> impl Parser<'a, u8> {
             Ok((b, &input[1..]))
         } else {
             Err(ParseError {
-                message: format!("[byte] no byte: {:?} found", b),
+                message: format!("[byte] no byte: {:?} found, input: {:?}", b, input),
             })
         }
     }
