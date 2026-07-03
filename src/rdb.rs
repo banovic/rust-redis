@@ -106,7 +106,7 @@ impl Rdb {
     pub async fn read_from_file(path: &String) -> Result<Self, Error> {
         let bytes = fs::read(path).await?;
         let input = &bytes[..];
-
+        println!("[RDB] : {:?}", input);
         // Read header: REDIS + 4 bytes version
         let ((redis, version), rest) = and!(tag_str("REDIS"), take(4)).parse(input).unwrap();
         println!("[RDB] REDIS            : {}", redis);
