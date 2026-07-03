@@ -78,6 +78,26 @@ fn parse_rdb_entry<'a>() -> impl Parser<'a, RdbEntry> {
     }
 }
 
+fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<RdbEntry>> {
+    move |input: ParserInput<'a>| {
+        // Database sub-section, starts with FE
+        let (db_section, rest) = byte(0xFE).parse(input)?;
+        println!("[RDB] DB Section       : {:?}", db_section);
+        let (db_index, rest) = le_integer().parse(rest)?;
+        println!("[RDB] DB Index         : {:?}", db_index);
+        let (db_hash_section, rest) = byte(0xFB).parse(rest)?;
+        println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
+        let (db_kvs_size, rest) = le_integer().parse(rest)?;
+        println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
+        let (db_expires_size, rest) = le_integer().parse(rest)?;
+        println!("[RDB] DB expires size  : {:?}", db_expires_size);
+        //let (db_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
+        let (db_entries, rest) = many0(parse_rdb_entry()).parse(rest)?;
+        println!("[RDB] DB entries       : {:?}", db_entries);
+        Ok((db_entries, rest))
+    }
+}
+
 impl Rdb {
     pub fn new() -> Self {
         Rdb { data: Vec::new() }
@@ -99,19 +119,21 @@ impl Rdb {
         println!("[RDB] MD KVs           : {:?}", metadata_kvs);
 
         // Database section, starts with FE
-        let (db_section, rest) = byte(0xFE).parse(rest).unwrap();
-        println!("[RDB] DB Section       : {:?}", db_section);
-        let (db_index, rest) = le_integer().parse(rest).unwrap();
-        println!("[RDB] DB Index         : {:?}", db_index);
-        let (db_hash_section, rest) = byte(0xFB).parse(rest).unwrap();
-        println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
-        let (db_kvs_size, rest) = le_integer().parse(rest).unwrap();
-        println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
-        let (db_expires_size, rest) = le_integer().parse(rest).unwrap();
-        println!("[RDB] DB expires size  : {:?}", db_expires_size);
-        //let (db_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
-        let (db_entries, rest) = many0(parse_rdb_entry()).parse(rest).unwrap();
-        println!("[RDB] DB entries       : {:?}", db_entries);
+        // let (db_section, rest) = byte(0xFE).parse(rest).unwrap();
+        // println!("[RDB] DB Section       : {:?}", db_section);
+        // let (db_index, rest) = le_integer().parse(rest).unwrap();
+        // println!("[RDB] DB Index         : {:?}", db_index);
+        // let (db_hash_section, rest) = byte(0xFB).parse(rest).unwrap();
+        // println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
+        // let (db_kvs_size, rest) = le_integer().parse(rest).unwrap();
+        // println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
+        // let (db_expires_size, rest) = le_integer().parse(rest).unwrap();
+        // println!("[RDB] DB expires size  : {:?}", db_expires_size);
+        // //let (db_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
+        // let (db_entries, rest) = many0(parse_rdb_entry()).parse(rest).unwrap();
+        // println!("[RDB] DB entries       : {:?}", db_entries);
+        let (db_sub_sections, rest) = many0(parse_db_subsection()).parse(rest).unwrap();
+        println!("[RDB] Db sub sections  : {:?}", db_sub_sections);
 
         // End of file section
         let (eof_section, rest) = byte(0xFF).parse(rest).unwrap();
@@ -119,7 +141,12 @@ impl Rdb {
         let (crc64, rest) = take(8).parse(rest).unwrap();
         println!("[RDB] CRC64            : {:?}", crc64);
 
-        Ok(Rdb { data: db_entries })
+        let mut data = Vec::new();
+        for db in db_sub_sections {
+            data.extend(db);
+        }
+
+        Ok(Rdb { data })
     }
 
     pub fn keys(&self) -> Vec<String> {
