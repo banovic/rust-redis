@@ -98,6 +98,16 @@ fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<RdbEntry>> {
     }
 }
 
+fn parse_metadata_subsection<'a>() -> impl Parser<'a, (String, String)> {
+    move |input: ParserInput<'a>| {
+        let (metadata_section, rest) = byte(0xFA).parse(input).unwrap();
+        println!("[RDB] MD Section       : {}", metadata_section);
+        let (metadata_kv, rest) = and!(le_string(), le_string()).parse(rest).unwrap();
+        println!("[RDB] MD KV            : {:?}", metadata_kv);
+        Ok((metadata_kv, rest))
+    }
+}
+
 impl Rdb {
     pub fn new() -> Self {
         Rdb { data: Vec::new() }
@@ -113,10 +123,12 @@ impl Rdb {
         println!("[RDB] VERSION          : {:?}", version);
 
         // Metadata section, starts with FA
-        let (metadata_section, rest) = byte(0xFA).parse(rest).unwrap();
-        println!("[RDB] MD Section       : {}", metadata_section);
-        let (metadata_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
-        println!("[RDB] MD KVs           : {:?}", metadata_kvs);
+        // let (metadata_section, rest) = byte(0xFA).parse(rest).unwrap();
+        // println!("[RDB] MD Section       : {}", metadata_section);
+        // let (metadata_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
+        // println!("[RDB] MD KVs           : {:?}", metadata_kvs);
+        let (metadata_sub_sections, rest) = many0(parse_metadata_subsection()).parse(rest).unwrap();
+        println!("[RDB] MD sub sections  : {:?}", metadata_sub_sections);
 
         // Database section, starts with FE
         // let (db_section, rest) = byte(0xFE).parse(rest).unwrap();
