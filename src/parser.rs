@@ -332,7 +332,7 @@ pub fn many1<'a, T>(p: impl Parser<'a, T>) -> impl Parser<'a, Vec<T>> {
             }
         }
 
-        if matches.len() > 1 {
+        if matches.len() >= 1 {
             return Ok((matches, rest));
         }
 

@@ -100,9 +100,9 @@ fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<RdbEntry>> {
 
 fn parse_metadata_subsection<'a>() -> impl Parser<'a, (String, String)> {
     move |input: ParserInput<'a>| {
-        let (metadata_section, rest) = byte(0xFA).parse(input).unwrap();
+        let (metadata_section, rest) = byte(0xFA).parse(input)?;
         println!("[RDB] MD Section       : {}", metadata_section);
-        let (metadata_kv, rest) = and!(le_string(), le_string()).parse(rest).unwrap();
+        let (metadata_kv, rest) = and!(le_string(), le_string()).parse(rest)?;
         println!("[RDB] MD KV            : {:?}", metadata_kv);
         Ok((metadata_kv, rest))
     }
