@@ -345,7 +345,28 @@ impl Store {
                 TryExecuteResult::Done(Resp::simple_string("OK"))
             }
 
-            Command::Get { key } => self.command_get(&key),
+            Command::Get { key } => {
+                match self.rdb.get(&key) {
+                    Some(value) => TryExecuteResult::Done(Resp::BulkString(value)),
+                    None => match self.data.get(&key) {
+                        Some(Value {
+                            t,
+                            ttl,
+                            value: PrimitiveValue::Str(value),
+                        }) => match ttl {
+                            None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+                            Some(duration) if *t + *duration < Instant::now() => {
+                                TryExecuteResult::Done(Resp::NullBulkString)
+                            }
+                            Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+                        },
+                        Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
+                        None => TryExecuteResult::Done(Resp::NullBulkString),
+                    },
+                }
+            }
+
+            //self.command_get(&key),
             // match self.data.get(&key) {
             //     Some(Value {
             //         t,
