@@ -2,6 +2,7 @@
 //use clap::Parser;
 use core::{num, str};
 use futures::channel::oneshot;
+use std::f32::consts::E;
 //use futures::future::select_all;
 use std::collections::HashSet;
 use std::env;
@@ -47,6 +48,7 @@ use rdb::Rdb;
 
 use crate::PrimitiveValue::List;
 use crate::command::{XreadStreamIdInput, next_stream_id};
+use crate::rdb::RdbEntryExpiration;
 use crate::resp::parse_resp;
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
@@ -315,8 +317,28 @@ impl Store {
     }
 
     fn command_get(&self, key: &Key) -> TryExecuteResult {
-        match self.rdb.get(key) {
-            Some(value) => TryExecuteResult::Done(Resp::BulkString(value)),
+        match self.rdb.get_entry(key) {
+            Some(entry) => match entry.expire {
+                RdbEntryExpiration::Milliseconds(ms) => {
+                    let expires = UNIX_EPOCH + Duration::from_millis(ms as u64);
+                    if expires < SystemTime::now() {
+                        TryExecuteResult::Done(Resp::NullBulkString)
+                    } else {
+                        TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
+                    }
+                }
+                RdbEntryExpiration::Seconds(secs) => {
+                    let expires = UNIX_EPOCH + Duration::from_secs(secs as u64);
+                    if expires < SystemTime::now() {
+                        TryExecuteResult::Done(Resp::NullBulkString)
+                    } else {
+                        TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
+                    }
+                }
+                RdbEntryExpiration::None => {
+                    TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
+                }
+            },
             None => TryExecuteResult::Done(Resp::NullBulkString),
         }
     }
@@ -346,24 +368,25 @@ impl Store {
             }
 
             Command::Get { key } => {
-                match self.rdb.get(&key) {
-                    Some(value) => TryExecuteResult::Done(Resp::BulkString(value)),
-                    None => match self.data.get(&key) {
-                        Some(Value {
-                            t,
-                            ttl,
-                            value: PrimitiveValue::Str(value),
-                        }) => match ttl {
-                            None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
-                            Some(duration) if *t + *duration < Instant::now() => {
-                                TryExecuteResult::Done(Resp::NullBulkString)
-                            }
-                            Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
-                        },
-                        Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
-                        None => TryExecuteResult::Done(Resp::NullBulkString),
-                    },
-                }
+                self.command_get(&key)
+                // match self.rdb.get(&key) {
+                //     Some(value) => TryExecuteResult::Done(Resp::BulkString(value)),
+                //     None => match self.data.get(&key) {
+                //         Some(Value {
+                //             t,
+                //             ttl,
+                //             value: PrimitiveValue::Str(value),
+                //         }) => match ttl {
+                //             None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+                //             Some(duration) if *t + *duration < Instant::now() => {
+                //                 TryExecuteResult::Done(Resp::NullBulkString)
+                //             }
+                //             Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+                //         },
+                //         Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
+                //         None => TryExecuteResult::Done(Resp::NullBulkString),
+                //     },
+                // }
             }
 
             //self.command_get(&key),

@@ -16,10 +16,10 @@ pub enum RdbEntryExpiration {
 
 #[derive(Debug)]
 pub struct RdbEntry {
-    encoding: u8,
-    name: Bytes,
-    value: Bytes,
-    expire: RdbEntryExpiration,
+    pub encoding: u8,
+    pub name: Bytes,
+    pub value: Bytes,
+    pub expire: RdbEntryExpiration,
 }
 
 #[derive(Debug)]
@@ -125,28 +125,9 @@ impl Rdb {
         println!("[RDB] REDIS            : {}", redis);
         println!("[RDB] VERSION          : {:?}", version);
 
-        // Metadata section, starts with FA
-        // let (metadata_section, rest) = byte(0xFA).parse(rest).unwrap();
-        // println!("[RDB] MD Section       : {}", metadata_section);
-        // let (metadata_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
-        // println!("[RDB] MD KVs           : {:?}", metadata_kvs);
         let (metadata_sub_sections, rest) = many0(parse_metadata_subsection()).parse(rest).unwrap();
         println!("[RDB] MD sub sections  : {:?}", metadata_sub_sections);
 
-        // Database section, starts with FE
-        // let (db_section, rest) = byte(0xFE).parse(rest).unwrap();
-        // println!("[RDB] DB Section       : {:?}", db_section);
-        // let (db_index, rest) = le_integer().parse(rest).unwrap();
-        // println!("[RDB] DB Index         : {:?}", db_index);
-        // let (db_hash_section, rest) = byte(0xFB).parse(rest).unwrap();
-        // println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
-        // let (db_kvs_size, rest) = le_integer().parse(rest).unwrap();
-        // println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
-        // let (db_expires_size, rest) = le_integer().parse(rest).unwrap();
-        // println!("[RDB] DB expires size  : {:?}", db_expires_size);
-        // //let (db_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
-        // let (db_entries, rest) = many0(parse_rdb_entry()).parse(rest).unwrap();
-        // println!("[RDB] DB entries       : {:?}", db_entries);
         let (db_sub_sections, rest) = many0(parse_db_subsection()).parse(rest).unwrap();
         println!("[RDB] Db sub sections  : {:?}", db_sub_sections);
 
@@ -178,6 +159,15 @@ impl Rdb {
         {
             if name == &key.0 {
                 return Some(value.clone());
+            }
+        }
+        None
+    }
+
+    pub fn get_entry(&self, key: &Key) -> Option<&RdbEntry> {
+        for entry in &self.data {
+            if entry.name == key.0 {
+                return Some(entry);
             }
         }
         None
