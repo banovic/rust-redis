@@ -94,22 +94,23 @@ impl Aof {
         aof_filename.to_string()
     }
 
-    pub async fn debug_file(&mut self) {
-        let dirname = format!("{}/{}/", self.dir, self.appenddirname);
-        let base_filename = format!("{}.1.incr.aof", self.appendfilename);
-        let filename = format!("{}{}", dirname, base_filename);
-        let s = fs::read_to_string(Path::new(&filename)).await.unwrap();
-        println!("[aof] DEBUG: content = {}", s);
-    }
+    // pub async fn debug_file(&mut self) {
+    //     let dirname = format!("{}/{}/", self.dir, self.appenddirname);
+    //     let base_filename = format!("{}.1.incr.aof", self.appendfilename);
+    //     let filename = format!("{}{}", dirname, base_filename);
+    //     let s = fs::read_to_string(Path::new(&filename)).await.unwrap();
+    //     println!("[aof] DEBUG: content = {}", s);
+    // }
 
     pub async fn append(&mut self, r: Resp) {
         match self.aof {
             Some(ref mut file) => {
                 let bytes = r.to_bytes();
                 let res = file.write_all(&bytes).await;
+                file.flush().await;
                 println!("[aof] writing resp: {:?}, bytes: {:?}", r, bytes);
                 println!("[aof] writing resp: success: {:?}", res);
-                self.debug_file().await;
+                //                self.debug_file().await;
             }
             None => {
                 println!("[aof] no aof file - no append, this is ok");
