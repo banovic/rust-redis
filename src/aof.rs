@@ -95,9 +95,10 @@ impl Aof {
     }
 
     pub async fn debug_file(&mut self) {
-        let mut s = String::new();
-        let r = self.aof.as_mut().unwrap().read_to_string(&mut s).await;
-        println!("[aof] DEBUG: r = {:?}", r);
+        let dirname = format!("{}/{}/", self.dir, self.appenddirname);
+        let base_filename = format!("{}.1.incr.aof", self.appendfilename);
+        let filename = format!("{}{}", dirname, base_filename);
+        let s = fs::read_to_string(Path::new(&filename)).await.unwrap();
         println!("[aof] DEBUG: content = {}", s);
     }
 
