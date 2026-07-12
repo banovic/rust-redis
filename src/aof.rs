@@ -131,15 +131,19 @@ impl Aof {
     }
 
     pub async fn append(&mut self, r: Resp) {
-        println!("[aof] writing resp: {:?}", r);
         match self.aof {
             Some(ref mut file) => match r.get_bytes() {
                 Some(bytes) => {
+                    println!("[aof] writing resp: {:?}, bytes: {:?}", r, bytes);
                     file.write_all(&bytes).await.unwrap();
                 }
-                None => {}
+                None => {
+                    println!("[aof] cannot get bytes from resp: {:?}", r);
+                }
             },
-            None => {}
+            None => {
+                println!("[aof] no aof file - no append, this is ok");
+            }
         }
     }
 }
