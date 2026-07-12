@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use tokio::fs::{self, File};
+use tokio::{
+    fs::{self, File},
+    io::AsyncWriteExt,
+};
 
 use crate::Config;
 
@@ -38,9 +41,16 @@ impl Aof {
 
             // Create file
             let filename = format!("{}{}.1.incr.aof", dirname, self.appendfilename);
-            // println!("[aof] self.appendfilename: {}", self.appendfilename);
-            // println!("[aof] creating initial aof: {}", filename);
             let mut file = File::create(filename).await.unwrap();
+
+            // Create manifest file
+            let mf_base_filename = format!("{}.manifest", self.appendfilename);
+            let mf_filename = format!("{}{}", dirname, mf_base_filename);
+            let mut mf_file = File::create(mf_filename).await.unwrap();
+            let _ = mf_file
+                .write(format!("file {} seq 1 type i", mf_base_filename).as_bytes())
+                .await
+                .unwrap();
         }
     }
 }
