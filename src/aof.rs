@@ -46,6 +46,7 @@ impl Aof {
             // Create manifest file
             let mf_base_filename = format!("{}.manifest", self.appendfilename);
             let mf_filename = format!("{}{}", dirname, mf_base_filename);
+            println!("[aof] creating manifest file: {}", mf_filename);
             let mut mf_file = File::create(mf_filename).await.unwrap();
             let _ = mf_file
                 .write(format!("file {} seq 1 type i", mf_base_filename).as_bytes())
