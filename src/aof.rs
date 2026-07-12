@@ -39,6 +39,8 @@ impl Aof {
             // Create file
             let basefilename = self.appendfilename.split(".").nth(0).unwrap();
             let filename = format!("{}/{}.1.incr.aof", dirname, basefilename);
+            println!("[aof] self.appendfilename: {}", self.appendfilename);
+            println!("[aof] creating initial aof: {}", filename);
             let mut file = File::create(filename).await.unwrap();
         }
     }
