@@ -390,15 +390,19 @@ impl Store {
         }
     }
 
-    fn command_config_get(&self, parameter: &Bytes) -> TryExecuteResult {
+    fn command_config_get(&self, parameter: &str) -> TryExecuteResult {
         let value = match &parameter[..] {
-            b"dir" => &self.dir,
-            b"dbfilename" => &self.dbfilename,
+            "dir" => &self.dir,
+            "dbfilename" => &self.dbfilename,
+            "appendonly" => &Some("no".to_string()),
+            "appenddirname" => &Some("appendonlydir".to_string()),
+            "appendfilename" => &Some("appendonly.aof".to_string()),
+            "appendfsync" => &Some("everysec".to_string()),
             _ => &None,
         };
         let mut params: Vec<Resp> = Vec::new();
         if let Some(v) = value {
-            params.push(Resp::BulkString(parameter.clone()));
+            params.push(Resp::bulk_string(parameter));
             params.push(Resp::BulkString(v.as_bytes().to_vec()));
         }
         TryExecuteResult::Done(Resp::Array(params))

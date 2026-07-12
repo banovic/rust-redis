@@ -180,7 +180,7 @@ pub enum Command {
         timeout: u64,
     },
     ConfigGet {
-        parameter: Bytes,
+        parameter: String,
     },
     Keys {
         pattern: String,
@@ -610,7 +610,7 @@ impl Command {
                     if let Some(subcommand) = els[1].get_str() {
                         if subcommand == "GET" && els.len() == 3 {
                             Some(Command::ConfigGet {
-                                parameter: els[2].get_bytes().unwrap(),
+                                parameter: els[2].get_str().unwrap().to_string(),
                             })
                         } else {
                             None
