@@ -39,6 +39,7 @@ impl Aof {
             // Open file for writing, appending:
             let file = OpenOptions::new()
                 .append(true)
+                .create(true)
                 .open(Path::new(&aof_filename))
                 .await
                 .unwrap();
