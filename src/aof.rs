@@ -38,6 +38,7 @@ impl Aof {
             let aof_filename = Aof::get_aof_filename(&mf_filename).await;
             // Open file for writing, appending:
             let file = OpenOptions::new()
+                .write(true)
                 .append(true)
                 .create(true)
                 .open(Path::new(&aof_filename))
