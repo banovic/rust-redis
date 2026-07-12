@@ -41,18 +41,13 @@ impl Aof {
 
             // Create file
             let filename = format!("{}{}.1.incr.aof", dirname, self.appendfilename);
-            let mut file = File::create(filename).await.unwrap();
+            let mut file = File::create(filename.clone()).await.unwrap();
 
             // Create manifest file
             let mf_base_filename = format!("{}.manifest", self.appendfilename);
             let mf_filename = format!("{}{}", dirname, mf_base_filename);
-            println!("[aof] creating manifest file: {}", mf_filename);
             let mut mf_file = File::create(mf_filename).await.unwrap();
-            let line = format!("file {} seq 1 type i", mf_base_filename);
-            println!(
-                "[aof] writing line in manifest file: {}, {}",
-                mf_base_filename, line
-            );
+            let line = format!("file {} seq 1 type i", filename);
             let _ = mf_file.write_all(line.as_bytes()).await.unwrap();
         }
     }
