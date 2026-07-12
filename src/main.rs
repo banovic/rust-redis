@@ -112,16 +112,17 @@ struct Store {
     // Last replication offset acked by each replica, keyed by client id.
     replica_acks: HashMap<ClientId, u64>,
     pending_write_commands_for_wait: bool,
-    dir: String,
-    dbfilename: Option<String>,
+    config: Config,
+    // dir: String,
+    // dbfilename: Option<String>,
 }
 
 impl Store {
-    async fn new(is_replica: bool, dir: String, dbfilename: Option<String>) -> Self {
+    async fn new(is_replica: bool, config: Config) -> Self {
         let rdb = {
-            if dbfilename.is_some() {
-                let d = dir.clone();
-                let f = dbfilename.clone().unwrap();
+            if config.dbfilename.is_some() {
+                let d = config.dir.clone();
+                let f = config.dbfilename.clone().unwrap();
                 let filename = format!("{}/{}", d, f);
                 Rdb::read_from_file(&filename).await.ok()
             } else {
@@ -130,7 +131,7 @@ impl Store {
         };
 
         match rdb {
-            Some(db) => Self::from_rdb(is_replica, dir, dbfilename, &db),
+            Some(db) => Self::from_rdb(is_replica, config, &db),
             None => Self {
                 is_replica,
                 replicas: HashMap::new(),
@@ -143,13 +144,12 @@ impl Store {
                 master_ack: 0,
                 replica_acks: HashMap::new(),
                 pending_write_commands_for_wait: false,
-                dir,
-                dbfilename,
+                config,
             },
         }
     }
 
-    fn from_rdb(is_replica: bool, dir: String, dbfilename: Option<String>, rdb: &Rdb) -> Self {
+    fn from_rdb(is_replica: bool, config: Config, rdb: &Rdb) -> Self {
         let mut data = HashMap::new();
 
         for (k, v) in &rdb.data {
@@ -193,8 +193,7 @@ impl Store {
             master_ack: 0,
             replica_acks: HashMap::new(),
             pending_write_commands_for_wait: false,
-            dir,
-            dbfilename,
+            config,
         }
     }
 
@@ -387,12 +386,12 @@ impl Store {
 
     fn command_config_get(&self, parameter: &str) -> TryExecuteResult {
         let value = match &parameter[..] {
-            "dir" => &Some(self.dir.clone()),
-            "dbfilename" => &self.dbfilename,
-            "appendonly" => &Some("no".to_string()),
-            "appenddirname" => &Some("appendonlydir".to_string()),
-            "appendfilename" => &Some("appendonly.aof".to_string()),
-            "appendfsync" => &Some("everysec".to_string()),
+            "dir" => &Some(self.config.dir.clone()),
+            "dbfilename" => &self.config.dbfilename,
+            "appendonly" => &Some(self.config.appendonly.clone()),
+            "appenddirname" => &Some(self.config.appenddirname.clone()),
+            "appendfilename" => &Some(self.config.appendfilename.clone()),
+            "appendfsync" => &Some(self.config.appendfsync.clone()),
             _ => &None,
         };
         let mut params: Vec<Resp> = Vec::new();
@@ -1594,20 +1593,63 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
 #[derive(clap::Parser, Debug)]
 struct Args {
     /// Port on which to start
-    #[arg(long)]
-    port: Option<u16>,
+    #[arg(long, default_value_t = 6379)]
+    port: u16,
 
     /// Replica
     #[arg(long)]
     replicaof: Option<String>,
 
     /// dir
-    #[arg(long)]
-    dir: Option<String>,
+    #[arg(long, default_value_t = env::current_dir().unwrap().to_str().unwrap().to_string())]
+    dir: String,
 
-    /// dbfilename
+    /// dbfilename, replication
     #[arg(long)]
     dbfilename: Option<String>,
+
+    /// appendonly, append only file (aof)
+    #[arg(long, default_value = "no")]
+    appendonly: String,
+
+    /// appenddirname, append only file (aof)
+    #[arg(long, default_value = "appendonlydir")]
+    appenddirname: String,
+
+    /// appendfilename, append only file (aof)
+    #[arg(long, default_value = "appendonly.aof")]
+    appendfilename: String,
+
+    /// appendfsync, append only file (aof)
+    #[arg(long, default_value = "everysec")]
+    appendfsync: String,
+}
+
+#[derive(Debug)]
+struct Config {
+    port: u16,
+    replicaof: Option<String>,
+    dir: String,
+    dbfilename: Option<String>,
+    appendonly: String,
+    appenddirname: String,
+    appendfilename: String,
+    appendfsync: String,
+}
+
+impl Config {
+    fn from_args(args: Args) -> Self {
+        Config {
+            port: args.port,
+            replicaof: args.replicaof,
+            dir: args.dir,
+            dbfilename: args.dbfilename,
+            appendonly: args.appendonly,
+            appenddirname: args.appenddirname,
+            appendfilename: args.appendfilename,
+            appendfsync: args.appendfsync,
+        }
+    }
 }
 
 #[tokio::main]
@@ -1618,21 +1660,15 @@ async fn main() {
     let client_counter = AtomicUsize::new(1);
 
     // CLI Args
-    let default_port = 6379;
     let args = <Args as clap::Parser>::parse();
-    let port = args.port.unwrap_or(default_port);
-    let master_addr = args.replicaof.map(|v| v.replace(" ", ":"));
+    let config = Config::from_args(args);
+    let port = config.port;
+    let master_addr = config.replicaof.as_ref().map(|v| v.replace(" ", ":"));
     let is_replica = master_addr.is_some();
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
-    let store = Store::new(
-        is_replica,
-        args.dir
-            .unwrap_or(env::current_dir().unwrap().to_str().unwrap().to_string()),
-        args.dbfilename,
-    )
-    .await;
+    let store = Store::new(is_replica, config).await;
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     if let Some(addr) = master_addr {
