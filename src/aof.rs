@@ -96,13 +96,15 @@ impl Aof {
         aof_filename.to_string()
     }
 
-    // pub async fn debug_file(&mut self) {
-    //     let dirname = format!("{}/{}/", self.dir, self.appenddirname);
-    //     let base_filename = format!("{}.1.incr.aof", self.appendfilename);
-    //     let filename = format!("{}{}", dirname, base_filename);
-    //     let s = fs::read_to_string(Path::new(&filename)).await.unwrap();
-    //     println!("[aof] DEBUG: content = {}", s);
-    // }
+    pub async fn debug_file(&mut self) {
+        let filename = format!(
+            "{}/{}/{}",
+            self.dir, self.appenddirname, self.appendfilename
+        );
+        println!("[aof] DEBUG: filename = {}", filename);
+        let s = fs::read_to_string(Path::new(&filename)).await.unwrap();
+        println!("[aof] DEBUG: content = {}", s);
+    }
 
     pub async fn append(&mut self, r: Resp) {
         match self.aof {
