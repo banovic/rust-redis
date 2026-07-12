@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tokio::fs;
+use tokio::fs::{self, File};
 
 use crate::Config;
 
@@ -35,6 +35,11 @@ impl Aof {
                     .await
                     .expect(&format!("[aof] could not create dir {}", dirname));
             }
+
+            // Create file
+            let basefilename = self.appendfilename.split(".").nth(0).unwrap();
+            let filename = format!("{}/{}.1.incr.aof", dirname, basefilename);
+            let mut file = File::create(filename).await.unwrap();
         }
     }
 }
