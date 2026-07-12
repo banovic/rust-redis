@@ -112,15 +112,15 @@ struct Store {
     // Last replication offset acked by each replica, keyed by client id.
     replica_acks: HashMap<ClientId, u64>,
     pending_write_commands_for_wait: bool,
-    dir: Option<String>,
+    dir: String,
     dbfilename: Option<String>,
 }
 
 impl Store {
-    async fn new(is_replica: bool, dir: Option<String>, dbfilename: Option<String>) -> Self {
+    async fn new(is_replica: bool, dir: String, dbfilename: Option<String>) -> Self {
         let rdb = {
-            if dir.is_some() && dbfilename.is_some() {
-                let d = dir.clone().unwrap();
+            if dbfilename.is_some() {
+                let d = dir.clone();
                 let f = dbfilename.clone().unwrap();
                 let filename = format!("{}/{}", d, f);
                 Rdb::read_from_file(&filename).await.ok()
@@ -149,12 +149,7 @@ impl Store {
         }
     }
 
-    fn from_rdb(
-        is_replica: bool,
-        dir: Option<String>,
-        dbfilename: Option<String>,
-        rdb: &Rdb,
-    ) -> Self {
+    fn from_rdb(is_replica: bool, dir: String, dbfilename: Option<String>, rdb: &Rdb) -> Self {
         let mut data = HashMap::new();
 
         for (k, v) in &rdb.data {
@@ -392,7 +387,7 @@ impl Store {
 
     fn command_config_get(&self, parameter: &str) -> TryExecuteResult {
         let value = match &parameter[..] {
-            "dir" => &self.dir,
+            "dir" => &Some(self.dir.clone()),
             "dbfilename" => &self.dbfilename,
             "appendonly" => &Some("no".to_string()),
             "appenddirname" => &Some("appendonlydir".to_string()),
@@ -1631,7 +1626,13 @@ async fn main() {
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
-    let store = Store::new(is_replica, args.dir, args.dbfilename).await;
+    let store = Store::new(
+        is_replica,
+        args.dir
+            .unwrap_or(env::current_dir().unwrap().to_str().unwrap().to_string()),
+        args.dbfilename,
+    )
+    .await;
     tokio::spawn(run_store(store, rx, tx.clone()));
 
     if let Some(addr) = master_addr {
