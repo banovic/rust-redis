@@ -134,8 +134,9 @@ impl Aof {
         match self.aof {
             Some(ref mut file) => {
                 let bytes = r.to_bytes();
+                let res = file.write_all(&bytes).await;
                 println!("[aof] writing resp: {:?}, bytes: {:?}", r, bytes);
-                let _ = file.write_all(&bytes).await.unwrap();
+                println!("[aof] writing resp: success: {:?}", res);
             }
             None => {
                 println!("[aof] no aof file - no append, this is ok");
