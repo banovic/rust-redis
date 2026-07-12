@@ -1028,7 +1028,9 @@ async fn run_store(
                     None
                 };
 
-                aof.append(command.to_resp().unwrap()).await;
+                if let Some(resp) = command.to_resp() {
+                    aof.append(resp).await;
+                }
 
                 match store.try_execute(client_id, command) {
                     TryExecuteResult::Done(reply) => {
