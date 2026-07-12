@@ -1006,7 +1006,12 @@ enum Envelope {
 }
 
 // This layer handles timeouts
-async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc::Sender<Envelope>) {
+async fn run_store(
+    mut aof: Aof,
+    mut store: Store,
+    mut rx: mpsc::Receiver<Envelope>,
+    tx: mpsc::Sender<Envelope>,
+) {
     while let Some(e) = rx.recv().await {
         match e {
             Envelope::WithReply {
@@ -1022,6 +1027,8 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
                 } else {
                     None
                 };
+
+                aof.append(command.to_resp().unwrap()).await;
 
                 match store.try_execute(client_id, command) {
                     TryExecuteResult::Done(reply) => {
@@ -1669,13 +1676,12 @@ async fn main() {
     let is_replica = master_addr.is_some();
 
     // Aof setup
-    let aof = Aof::from_config(&config);
-    aof.init().await;
+    let aof = Aof::from_config(&config).await;
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
     let store = Store::new(is_replica, config).await;
-    tokio::spawn(run_store(store, rx, tx.clone()));
+    tokio::spawn(run_store(aof, store, rx, tx.clone()));
 
     if let Some(addr) = master_addr {
         tokio::spawn(run_replica_server(addr, port, tx.clone()));
