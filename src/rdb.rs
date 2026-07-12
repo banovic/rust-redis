@@ -8,69 +8,102 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub enum RdbEntryExpiration {
+pub enum RdbValueExpiration {
     None,
     Seconds(u32),
     Milliseconds(u64),
 }
 
 #[derive(Debug)]
-pub struct RdbEntry {
+pub struct RdbString {
     pub encoding: u8,
-    pub name: Bytes,
     pub value: Bytes,
-    pub expire: RdbEntryExpiration,
+    pub expire: RdbValueExpiration,
+}
+
+impl RdbString {
+    pub fn serialize(&self, key: &Key) -> Vec<u8> {
+        // Expire, if any
+        let mut out = match self.expire {
+            RdbValueExpiration::None => Vec::new(),
+            RdbValueExpiration::Milliseconds(ms) => {
+                let mut v = vec![0xFC];
+                v.extend(ms.to_le_bytes());
+                v
+            }
+            RdbValueExpiration::Seconds(secs) => {
+                let mut v = vec![0xFD];
+                v.extend(secs.to_le_bytes());
+                v
+            }
+        };
+        // Type and encoding byte
+        out.push(self.encoding);
+        // Key and value
+        out.extend(le_encode_size(key.0.len()));
+        out.extend_from_slice(&key.0);
+        out.extend(le_encode_size(self.value.len()));
+        out.extend_from_slice(&self.value);
+        out
+    }
 }
 
 #[derive(Debug)]
 pub struct Rdb {
-    data: Vec<RdbEntry>,
+    pub metadata: HashMap<String, String>,
+    pub data: HashMap<Key, RdbString>,
 }
 
-fn parse_rdb_entry<'a>() -> impl Parser<'a, RdbEntry> {
+fn parse_rdb_entry<'a>() -> impl Parser<'a, (Key, RdbString)> {
     move |input: ParserInput<'a>| {
-        if let Ok(((encoding, name, value), rest)) =
+        if let Ok(((encoding, key, value), rest)) =
             and!(byte(0x00), le_bytes(), le_bytes()).parse(input)
         {
             return Ok((
-                RdbEntry {
-                    encoding,
-                    name,
-                    value,
-                    expire: RdbEntryExpiration::None,
-                },
+                (
+                    Key(key),
+                    RdbString {
+                        encoding,
+                        value,
+                        expire: RdbValueExpiration::None,
+                    },
+                ),
                 rest,
             ));
         }
 
-        if let Ok(((_, expire, encoding, name, value), rest)) =
+        if let Ok(((_, expire, encoding, key, value), rest)) =
             and!(byte(0xFC), take(8), byte(0x00), le_bytes(), le_bytes()).parse(input)
         {
             return Ok((
-                RdbEntry {
-                    encoding,
-                    name,
-                    value,
-                    expire: RdbEntryExpiration::Milliseconds(u64::from_le_bytes(
-                        expire.try_into().unwrap(),
-                    )),
-                },
+                (
+                    Key(key),
+                    RdbString {
+                        encoding,
+                        value,
+                        expire: RdbValueExpiration::Milliseconds(u64::from_le_bytes(
+                            expire.try_into().unwrap(),
+                        )),
+                    },
+                ),
                 rest,
             ));
         }
 
-        if let Ok(((_, expire, encoding, name, value), rest)) =
+        if let Ok(((_, expire, encoding, key, value), rest)) =
             and!(byte(0xFD), take(4), byte(0x00), le_bytes(), le_bytes()).parse(input)
         {
             return Ok((
-                RdbEntry {
-                    encoding,
-                    name,
-                    value,
-                    expire: RdbEntryExpiration::Seconds(u32::from_le_bytes(
-                        expire.try_into().unwrap(),
-                    )),
-                },
+                (
+                    Key(key),
+                    RdbString {
+                        encoding,
+                        value,
+                        expire: RdbValueExpiration::Seconds(u32::from_le_bytes(
+                            expire.try_into().unwrap(),
+                        )),
+                    },
+                ),
                 rest,
             ));
         }
@@ -81,7 +114,7 @@ fn parse_rdb_entry<'a>() -> impl Parser<'a, RdbEntry> {
     }
 }
 
-fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<RdbEntry>> {
+fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<(Key, RdbString)>> {
     move |input: ParserInput<'a>| {
         // Database sub-section, starts with FE
         let (db_section, rest) = byte(0xFE).parse(input)?;
@@ -111,65 +144,185 @@ fn parse_metadata_subsection<'a>() -> impl Parser<'a, (String, String)> {
     }
 }
 
+// Length-Encoded (LE) string; this can be more complex than le_integer()
+pub fn le_string<'a>() -> impl Parser<'a, String> {
+    move |input: ParserInput<'a>| {
+        let first = input[0];
+        match (first & 0b1100_0000) >> 6 {
+            0b00 => {
+                let start = 1;
+                let length = (first & 0b0011_1111) as usize;
+                let end = start + length;
+                assert!(input.len() >= end);
+                let s = String::from_utf8(input[start..end].to_vec()).unwrap();
+                Ok((s, &input[end..]))
+            }
+            0b01 => {
+                let start = 2;
+                let a = first & 0b0011_1111;
+                let b = input[1];
+                let length = ((a as usize) << 8) | (b as usize);
+                let end = start + length;
+                assert!(input.len() >= end);
+                let s = String::from_utf8(input[start..end].to_vec()).unwrap();
+                Ok((s, &input[end..]))
+            }
+            0b10 => {
+                let start = 5;
+                assert!(input.len() >= 5);
+                let length = ((input[1] as usize) << 24)
+                    | ((input[2] as usize) << 16)
+                    | ((input[3] as usize) << 8)
+                    | (input[4] as usize);
+                let end = start + length;
+                assert!(input.len() >= end);
+                let s = String::from_utf8(input[start..end].to_vec()).unwrap();
+                Ok((s, &input[end..]))
+            }
+            0b11 if first == 0b1100_0000 => {
+                // String is integer of length 1
+                assert!(input.len() >= 2);
+                let s = String::from_utf8(vec![input[1]]).unwrap();
+                Ok((s, &input[2..]))
+            }
+            0b11 if first == 0b1100_0001 => {
+                // String is integer of length 2
+                assert!(input.len() >= 3);
+                let s = String::from_utf8(vec![input[2], input[1]]).unwrap();
+                Ok((s, &input[3..]))
+            }
+            0b11 if first == 0b1100_0010 => {
+                // String is integer of length 4
+                assert!(input.len() >= 5);
+                let s = String::from_utf8(vec![input[4], input[3], input[2], input[1]]).unwrap();
+                Ok((s, &input[5..]))
+            }
+            _ => Err(ParseError {
+                message: format!("[le_string] unknown length prefix: {:?}", first),
+            }),
+        }
+    }
+}
+
+fn le_encode_string(s: &str) -> Vec<u8> {
+    let mut out = le_encode_size(s.as_bytes().len());
+    out.extend_from_slice(s.as_bytes());
+    out
+}
+
+fn le_encode_size(n: usize) -> Vec<u8> {
+    if n <= 0b11_1111 {
+        return vec![n as u8];
+    }
+
+    if n <= 0b11_1111_1111_1111 {
+        let a = 0b0100_0000 | (n >> 8) as u8;
+        let b = n as u8;
+        return vec![a, b];
+    }
+
+    let m = 0b10_00_0000;
+    let l = (n as u32).to_be_bytes();
+    let mut enc = vec![m];
+    enc.extend(l);
+    enc
+}
+
 impl Rdb {
     pub fn new() -> Self {
-        Rdb { data: Vec::new() }
+        Rdb {
+            metadata: HashMap::new(),
+            data: HashMap::new(),
+        }
     }
 
     pub async fn read_from_file(path: &String) -> Result<Self, Error> {
         let bytes = fs::read(path).await?;
-        let input = &bytes[..];
+        Rdb::deserialize(&bytes[..])
+    }
+
+    pub fn deserialize(input: &[u8]) -> Result<Self, Error> {
         println!("[RDB] : {:?}", input);
         // Read header: REDIS + 4 bytes version
-        let ((redis, version), rest) = and!(tag_str("REDIS"), take(4)).parse(input).unwrap();
+        let ((redis, version), input) = and!(tag_str("REDIS"), take(4)).parse(input).unwrap();
         println!("[RDB] REDIS            : {}", redis);
         println!("[RDB] VERSION          : {:?}", version);
 
-        let (metadata_sub_sections, rest) = many0(parse_metadata_subsection()).parse(rest).unwrap();
+        let (metadata_sub_sections, input) =
+            many0(parse_metadata_subsection()).parse(input).unwrap();
         println!("[RDB] MD sub sections  : {:?}", metadata_sub_sections);
+        let metadata: HashMap<String, String> = metadata_sub_sections.into_iter().collect();
 
-        let (db_sub_sections, rest) = many0(parse_db_subsection()).parse(rest).unwrap();
+        let (db_sub_sections, input) = many0(parse_db_subsection()).parse(input).unwrap();
         println!("[RDB] Db sub sections  : {:?}", db_sub_sections);
 
         // End of file section
-        let (eof_section, rest) = byte(0xFF).parse(rest).unwrap();
+        let (eof_section, input) = byte(0xFF).parse(input).unwrap();
         println!("[RDB] End Section      : {:?}", eof_section);
-        let (crc64, rest) = take(8).parse(rest).unwrap();
+        let (crc64, input) = take(8).parse(input).unwrap();
         println!("[RDB] CRC64            : {:?}", crc64);
 
-        let mut data = Vec::new();
+        let mut data_parts = Vec::new();
         for db in db_sub_sections {
-            data.extend(db);
+            data_parts.extend(db);
+        }
+        let data = data_parts.into_iter().collect();
+
+        Ok(Rdb { metadata, data })
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        // REDIS + version 4 bytes
+        out.extend_from_slice(b"REDIS0011");
+
+        // Metadata
+        for (k, v) in &self.metadata {
+            out.push(0xFA);
+            let key_le = le_encode_string(k);
+            let value_le = le_encode_string(v);
+            out.extend(key_le);
+            out.extend(value_le);
         }
 
-        Ok(Rdb { data })
+        // DB sub sections. Can by many databases in single file, but here only 1 or 0.
+        if !self.data.is_empty() {
+            out.push(0xFE); // Marks db section
+            out.push(0x00); // DB index - corresponds to db
+
+            // Calculate all key values hash size, and only those with expire
+            let kvs_size = le_encode_size(self.data.len());
+            let expires_size = le_encode_size(
+                self.data
+                    .values()
+                    .filter(|v| !matches!(v.expire, RdbValueExpiration::None))
+                    .count(),
+            );
+            out.push(0xFB); // Marks hash sizes section
+            out.extend(kvs_size);
+            out.extend(expires_size);
+
+            for (k, v) in &self.data {
+                out.extend(v.serialize(k));
+            }
+        }
+
+        // End of file section
+        out.push(0xFF);
+        // CRC - no real crc calculation needed
+        out.extend(vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        out
     }
 
     pub fn keys(&self) -> Vec<Bytes> {
-        self.data.iter().map(|e| e.name.clone()).collect()
+        self.data.keys().map(|k| k.0.clone()).collect()
     }
 
-    pub fn get(&self, key: &Key) -> Option<Bytes> {
-        for RdbEntry {
-            encoding: _,
-            name,
-            value,
-            expire: _,
-        } in &self.data
-        {
-            if name == &key.0 {
-                return Some(value.clone());
-            }
-        }
-        None
+    pub fn get(&self, key: &Key) -> Option<&RdbString> {
+        self.data.get(key)
     }
 
-    pub fn get_entry(&self, key: &Key) -> Option<&RdbEntry> {
-        for entry in &self.data {
-            if entry.name == key.0 {
-                return Some(entry);
-            }
-        }
-        None
+    pub fn set(&mut self, key: Key, value: RdbString) -> Option<RdbString> {
+        self.data.insert(key, value)
     }
 }

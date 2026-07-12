@@ -48,7 +48,7 @@ use rdb::Rdb;
 
 use crate::PrimitiveValue::List;
 use crate::command::{XreadStreamIdInput, next_stream_id};
-use crate::rdb::RdbEntryExpiration;
+use crate::rdb::{RdbString, RdbValueExpiration};
 use crate::resp::parse_resp;
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
@@ -56,6 +56,13 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
         .collect()
+}
+
+fn get_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 type RedisStream = BTreeMap<StreamKey, Vec<Bytes>>;
@@ -70,9 +77,9 @@ enum PrimitiveValue {
 
 #[derive(Debug)]
 struct Value {
-    t: Instant,
-    ttl: Option<Duration>,
     value: PrimitiveValue,
+    // Absolute expiration timestamp in milliseconds
+    expire_ms: Option<u64>,
 }
 
 type ClientId = usize;
@@ -107,7 +114,6 @@ struct Store {
     pending_write_commands_for_wait: bool,
     dir: Option<String>,
     dbfilename: Option<String>,
-    rdb: Rdb,
 }
 
 impl Store {
@@ -117,22 +123,73 @@ impl Store {
                 let d = dir.clone().unwrap();
                 let f = dbfilename.clone().unwrap();
                 let filename = format!("{}/{}", d, f);
-                match Rdb::read_from_file(&filename).await {
-                    Ok(rdb) => rdb,
-                    _ => {
-                        println!("Failed to read RDB file from: {}", filename);
-                        Rdb::new()
-                    }
-                }
+                Rdb::read_from_file(&filename).await.ok()
             } else {
-                Rdb::new()
+                None
             }
         };
+
+        match rdb {
+            Some(db) => Self::from_rdb(is_replica, dir, dbfilename, &db),
+            None => Self {
+                is_replica,
+                replicas: HashMap::new(),
+                data: HashMap::new(),
+                waiter_id: 0,
+                watched_keys: HashMap::new(),
+                stream_xread_waiters: HashMap::new(),
+                list_blpop_waiters: HashMap::new(),
+                wait_waiters: HashMap::new(),
+                master_ack: 0,
+                replica_acks: HashMap::new(),
+                pending_write_commands_for_wait: false,
+                dir,
+                dbfilename,
+            },
+        }
+    }
+
+    fn from_rdb(
+        is_replica: bool,
+        dir: Option<String>,
+        dbfilename: Option<String>,
+        rdb: &Rdb,
+    ) -> Self {
+        let mut data = HashMap::new();
+
+        for (k, v) in &rdb.data {
+            let expire_ms = match v {
+                RdbString {
+                    encoding: _,
+                    value: _,
+                    expire: RdbValueExpiration::None,
+                } => None,
+
+                RdbString {
+                    encoding: _,
+                    value: _,
+                    expire: RdbValueExpiration::Milliseconds(ms),
+                } => Some(*ms),
+
+                RdbString {
+                    encoding: _,
+                    value: _,
+                    expire: RdbValueExpiration::Seconds(secs),
+                } => Some(*secs as u64 * 1000),
+            };
+            data.insert(
+                k.clone(),
+                Value {
+                    value: PrimitiveValue::Str(v.value.clone()),
+                    expire_ms,
+                },
+            );
+        }
 
         Self {
             is_replica,
             replicas: HashMap::new(),
-            data: HashMap::new(),
+            data,
             waiter_id: 0,
             watched_keys: HashMap::new(),
             stream_xread_waiters: HashMap::new(),
@@ -143,8 +200,39 @@ impl Store {
             pending_write_commands_for_wait: false,
             dir,
             dbfilename,
-            rdb,
         }
+    }
+
+    fn to_rdb(&self) -> Rdb {
+        let mut rdb = Rdb::new();
+        for (k, v) in &self.data {
+            if let Value {
+                value: PrimitiveValue::Str(s),
+                expire_ms,
+            } = v
+            {
+                let r_key = k.clone();
+                match expire_ms {
+                    Some(ms) => rdb.set(
+                        r_key,
+                        RdbString {
+                            encoding: 0,
+                            value: s.clone(),
+                            expire: RdbValueExpiration::Milliseconds(*ms),
+                        },
+                    ),
+                    None => rdb.set(
+                        r_key,
+                        RdbString {
+                            encoding: 0,
+                            value: s.clone(),
+                            expire: RdbValueExpiration::None,
+                        },
+                    ),
+                };
+            }
+        }
+        rdb
     }
 
     // How many replicas have acked an offset >= target. With no writes pending
@@ -164,9 +252,8 @@ impl Store {
         F: Fn(&VecDeque<Bytes>) -> R,
     {
         if let Some(Value {
-            t: _,
-            ttl: _,
             value: PrimitiveValue::List(list),
+            expire_ms: _,
         }) = self.data.get(key)
         {
             Some(f(list))
@@ -183,9 +270,8 @@ impl Store {
             let mut stream_rows: Vec<Resp> = Vec::new();
 
             if let Some(Value {
-                t: _,
-                ttl: _,
                 value: PrimitiveValue::Stream(stream),
+                expire_ms: _,
             }) = self.data.get(&key)
             {
                 stream_rows.push(Resp::BulkString(key.0.clone()));
@@ -236,9 +322,8 @@ impl Store {
     fn fetch_blpop(&mut self, keys: &[Key]) -> (Resp, bool) {
         for k in keys {
             if let Some(Value {
-                t: _,
-                ttl: _,
                 value: PrimitiveValue::List(list),
+                expire_ms: _,
             }) = self.data.get_mut(k)
             {
                 if let Some(head) = list.pop_front() {
@@ -277,15 +362,26 @@ impl Store {
 
     fn command_set(&mut self, client_id: ClientId, cmd: &Command) -> TryExecuteResult {
         if let Command::Set { key, value, ex, px } = cmd {
-            let ttl = match (ex, px) {
-                (Some(ex), _) => Some(Duration::from_secs(*ex)),
-                (_, Some(px)) => Some(Duration::from_millis(*px)),
+            let expire_ms = match (ex, px) {
+                (Some(secs), _) => Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64
+                        + secs * 1000,
+                ),
+                (_, Some(ms)) => Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64
+                        + ms,
+                ),
                 _ => None,
             };
             let v = Value {
-                t: Instant::now(),
-                ttl,
                 value: PrimitiveValue::Str(value.clone()),
+                expire_ms,
             };
             self.data.insert(key.clone(), v);
             TryExecuteResult::Done(Resp::simple_string("OK"))
@@ -310,37 +406,50 @@ impl Store {
 
     fn command_keys(&self, pattern: &String) -> TryExecuteResult {
         let mut keys: Vec<Resp> = Vec::new();
-        for key in self.rdb.keys() {
-            keys.push(Resp::BulkString(key));
+        for key in self.data.keys() {
+            keys.push(Resp::BulkString(key.0.clone()));
         }
         TryExecuteResult::Done(Resp::Array(keys))
     }
 
     fn command_get(&self, key: &Key) -> TryExecuteResult {
-        match self.rdb.get_entry(key) {
-            Some(entry) => match entry.expire {
-                RdbEntryExpiration::Milliseconds(ms) => {
-                    let expires = UNIX_EPOCH + Duration::from_millis(ms as u64);
-                    if expires < SystemTime::now() {
-                        TryExecuteResult::Done(Resp::NullBulkString)
-                    } else {
-                        TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
-                    }
-                }
-                RdbEntryExpiration::Seconds(secs) => {
-                    let expires = UNIX_EPOCH + Duration::from_secs(secs as u64);
-                    if expires < SystemTime::now() {
-                        TryExecuteResult::Done(Resp::NullBulkString)
-                    } else {
-                        TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
-                    }
-                }
-                RdbEntryExpiration::None => {
-                    TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
-                }
+        match self.data.get(&key) {
+            Some(Value {
+                value: PrimitiveValue::Str(value),
+                expire_ms,
+            }) => match expire_ms {
+                None => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
+                Some(ms) if *ms < get_ms() => TryExecuteResult::Done(Resp::NullBulkString),
+                Some(_) => TryExecuteResult::Done(Resp::BulkString(value.to_vec())),
             },
+            Some(_) => TryExecuteResult::Done(Resp::NullBulkString), // TODO - error wrong type
             None => TryExecuteResult::Done(Resp::NullBulkString),
         }
+
+        //     match self.rdb.get(key) {
+        //     Some(entry) => match entry.expire {
+        //         RdbValueExpiration::Milliseconds(ms) => {
+        //             let expires = UNIX_EPOCH + Duration::from_millis(ms as u64);
+        //             if expires < SystemTime::now() {
+        //                 TryExecuteResult::Done(Resp::NullBulkString)
+        //             } else {
+        //                 TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
+        //             }
+        //         }
+        //         RdbValueExpiration::Seconds(secs) => {
+        //             let expires = UNIX_EPOCH + Duration::from_secs(secs as u64);
+        //             if expires < SystemTime::now() {
+        //                 TryExecuteResult::Done(Resp::NullBulkString)
+        //             } else {
+        //                 TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
+        //             }
+        //         }
+        //         RdbValueExpiration::None => {
+        //             TryExecuteResult::Done(Resp::BulkString(entry.value.clone()))
+        //         }
+        //     },
+        //     None => TryExecuteResult::Done(Resp::NullBulkString),
+        // }
     }
 
     // Pure, sync
@@ -353,15 +462,26 @@ impl Store {
 
         match cmd {
             Command::Set { key, value, ex, px } => {
-                let ttl = match (ex, px) {
-                    (Some(ex), _) => Some(Duration::from_secs(ex)),
-                    (_, Some(px)) => Some(Duration::from_millis(px)),
+                let expire_ms = match (ex, px) {
+                    (Some(secs), _) => Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64
+                            + secs * 1000,
+                    ),
+                    (_, Some(ms)) => Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64
+                            + ms,
+                    ),
                     _ => None,
                 };
                 let v = Value {
-                    t: Instant::now(),
-                    ttl,
                     value: PrimitiveValue::Str(value),
+                    expire_ms,
                 };
                 self.data.insert(key, v);
                 TryExecuteResult::Done(Resp::simple_string("OK"))
@@ -477,15 +597,13 @@ impl Store {
             }
             Command::Incr { key } => {
                 if let Some(Value {
-                    t,
-                    ttl: _,
                     value: PrimitiveValue::Str(s),
+                    expire_ms,
                 }) = self.data.get_mut(&key)
                 {
                     let result = parser::Parser::parse(&integer::<i64>(), s);
                     match result {
                         Ok((n, _)) => {
-                            *t = Instant::now();
                             *s = (n + 1).to_string().as_bytes().to_vec();
                             TryExecuteResult::Done(Resp::Integer(n + 1))
                         }
@@ -497,9 +615,8 @@ impl Store {
                     self.data.insert(
                         key,
                         Value {
-                            t: Instant::now(),
-                            ttl: None,
                             value: PrimitiveValue::Str(1.to_string().as_bytes().to_vec()),
+                            expire_ms: None,
                         },
                     );
                     TryExecuteResult::Done(Resp::Integer(1))
@@ -512,15 +629,13 @@ impl Store {
             } => {
                 // Ensure that there is stream `key`:
                 self.data.entry(key.clone()).or_insert(Value {
-                    t: Instant::now(),
-                    ttl: None,
                     value: PrimitiveValue::Stream(BTreeMap::new()),
+                    expire_ms: None,
                 });
 
                 if let Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::Stream(stream),
+                    expire_ms: _,
                 }) = self.data.get_mut(&key)
                 {
                     let (tid, sid) = match next_stream_id(id, stream) {
@@ -609,9 +724,8 @@ impl Store {
 
             Command::Xrange { key, start, end } => {
                 if let Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::Stream(stream),
+                    expire_ms: _,
                 }) = self.data.get(&key)
                 {
                     let mut data: Vec<Resp> = Vec::new();
@@ -639,19 +753,16 @@ impl Store {
 
             Command::Type { key } => match self.data.get(&key) {
                 Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::List(_),
+                    expire_ms: _,
                 }) => TryExecuteResult::Done(Resp::SimpleString("list".as_bytes().to_vec())),
                 Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::Str(_),
+                    expire_ms: _,
                 }) => TryExecuteResult::Done(Resp::SimpleString("string".as_bytes().to_vec())),
                 Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::Stream(_),
+                    expire_ms: _,
                 }) => TryExecuteResult::Done(Resp::SimpleString("stream".as_bytes().to_vec())),
                 _ => TryExecuteResult::Done(Resp::SimpleString("none".as_bytes().to_vec())),
             },
@@ -659,9 +770,8 @@ impl Store {
             Command::Rpush { key, elements } => {
                 let n = match self.data.get_mut(&key) {
                     Some(Value {
-                        t: _,
-                        ttl: _,
                         value: PrimitiveValue::List(list),
+                        expire_ms: _,
                     }) => {
                         for e in elements {
                             list.push_back(e);
@@ -673,9 +783,8 @@ impl Store {
                         self.data.insert(
                             key.clone(),
                             Value {
-                                t: Instant::now(),
-                                ttl: None,
                                 value: PrimitiveValue::List(elements.into()),
+                                expire_ms: None,
                             },
                         );
                         n
@@ -690,9 +799,8 @@ impl Store {
             Command::Lpush { key, mut elements } => {
                 let n = match self.data.get_mut(&key) {
                     Some(Value {
-                        t: _,
-                        ttl: _,
                         value: PrimitiveValue::List(list),
+                        expire_ms: _,
                     }) => {
                         for e in elements {
                             list.push_front(e);
@@ -705,9 +813,8 @@ impl Store {
                         self.data.insert(
                             key.clone(),
                             Value {
-                                t: Instant::now(),
-                                ttl: None,
                                 value: PrimitiveValue::List(elements.into()),
+                                expire_ms: None,
                             },
                         );
                         n
@@ -721,9 +828,8 @@ impl Store {
 
             Command::Lpop { key, count } => {
                 if let Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::List(list),
+                    expire_ms: _,
                 }) = self.data.get_mut(&key)
                 {
                     if list.is_empty() {
@@ -753,9 +859,8 @@ impl Store {
 
             Command::Lrange { key, start, end } => {
                 if let Some(Value {
-                    t: _,
-                    ttl: _,
                     value: PrimitiveValue::List(list),
+                    expire_ms: _,
                 }) = self.data.get(&key)
                 {
                     let a = if start < 0 {
@@ -881,6 +986,8 @@ enum Envelope {
     AddReplica {
         client_id: usize,
         tx: mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>,
+        // Need to reply back: replication_id (fixed for now) and RDB, this is just for rDB for now
+        reply_channel: oneshot::Sender<Vec<u8>>,
     },
     Replicate {
         command: Command,
@@ -1038,10 +1145,13 @@ async fn run_store(mut store: Store, mut rx: mpsc::Receiver<Envelope>, tx: mpsc:
             Envelope::AddReplica {
                 client_id,
                 tx: replica_tx,
+                reply_channel,
             } => {
                 // A newly connected replica is not an acknowledgement of pending writes,
                 // so it does not resolve any in-flight WAIT.
                 store.replicas.insert(client_id, replica_tx);
+                let rdb = store.to_rdb().serialize();
+                reply_channel.send(rdb);
             }
             // This is command execution on replica
             Envelope::Replicate { command } => {
@@ -1116,11 +1226,14 @@ async fn handle_client(
                                     },
                                     _,
                                 ) => {
-                                    // This client is replica
-                                    let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
-                                    let _ = write_resp(&mut stream, &Resp::File(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
+                                    // This client is replica!
+                                    let (reply_tx, reply_rx) = oneshot::channel::<Vec<u8>>();
                                     // Start counting bytes sent to this channel now:
-                                    let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone()}).await;
+                                    let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone(), reply_channel: reply_tx}).await;
+                                    let rdb = reply_rx.await.unwrap();
+                                    let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
+                                    //let _ = write_resp(&mut stream, &Resp::File(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
+                                    let _ = write_resp(&mut stream, &Resp::File(rdb)).await;
                                 },
                                 (Command::ReplconfAck { ack_bytes }, _) => {
                                     let _ = producer_ch.send(Envelope::ReplconfAck { client_id, ack_bytes: *ack_bytes }).await;
