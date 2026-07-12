@@ -93,42 +93,11 @@ impl Aof {
         aof_filename.to_string()
     }
 
-    pub async fn init(&mut self) {
-        if self.appendonly == "yes" {
-            let dirname = format!("{}/{}/", self.dir, self.appenddirname);
-            let path = Path::new(&dirname);
-            if Path::is_dir(path) {
-                println!("[aof] dir {:?} already exist", dirname);
-            } else {
-                let _ = fs::create_dir(path)
-                    .await
-                    .expect(&format!("[aof] could not create dir {}", dirname));
-            }
-
-            // Create file
-            let base_filename = format!("{}.1.incr.aof", self.appendfilename);
-            let filename = format!("{}{}", dirname, base_filename);
-            if !Path::exists(&Path::new(&filename)) {
-                let mut file = File::create(filename).await.unwrap();
-            }
-
-            // Create manifest file
-            let mf_base_filename = format!("{}.manifest", self.appendfilename);
-            let mf_filename = format!("{}{}", dirname, mf_base_filename);
-            if !Path::exists(&Path::new(&mf_filename)) {
-                let line = format!("file {} seq 1 type i", base_filename);
-                let mut mf_file = File::create(mf_filename.clone()).await.unwrap();
-                let _ = mf_file.write_all(line.as_bytes()).await.unwrap();
-            }
-
-            // Read manifest file
-            let mut mf_file = File::open(&Path::new(&mf_filename)).await.unwrap();
-            let mut buffer = String::new();
-            let _ = mf_file.read_to_string(&mut buffer).await.unwrap();
-            let aof_filename = buffer.split(' ').nth(1).unwrap();
-            println!("[aof] read aof file from manifest: {}", aof_filename);
-            self.appendfilename = aof_filename.to_string();
-        }
+    pub async fn debug_file(&mut self) {
+        let mut s = String::new();
+        let r = self.aof.as_mut().unwrap().read_to_string(&mut s).await;
+        println!("[aof] DEBUG: r = {:?}", r);
+        println!("[aof] DEBUG: content = {}", s);
     }
 
     pub async fn append(&mut self, r: Resp) {
@@ -138,6 +107,7 @@ impl Aof {
                 let res = file.write_all(&bytes).await;
                 println!("[aof] writing resp: {:?}, bytes: {:?}", r, bytes);
                 println!("[aof] writing resp: success: {:?}", res);
+                self.debug_file().await;
             }
             None => {
                 println!("[aof] no aof file - no append, this is ok");
