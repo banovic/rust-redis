@@ -45,6 +45,8 @@ mod command;
 use command::Command;
 mod rdb;
 use rdb::Rdb;
+mod aof;
+use aof::Aof;
 
 use crate::PrimitiveValue::List;
 use crate::command::{XreadStreamIdInput, next_stream_id};
@@ -1665,6 +1667,10 @@ async fn main() {
     let port = config.port;
     let master_addr = config.replicaof.as_ref().map(|v| v.replace(" ", ":"));
     let is_replica = master_addr.is_some();
+
+    // Aof setup
+    let aof = Aof::from_config(&config);
+    aof.init();
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
