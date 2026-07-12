@@ -111,10 +111,10 @@ impl Aof {
             Some(ref mut file) => {
                 let bytes = r.to_bytes();
                 let res = file.write_all(&bytes).await;
-                file.flush().await;
+                let _ = file.flush().await;
                 println!("[aof] writing resp: {:?}, bytes: {:?}", r, bytes);
                 println!("[aof] writing resp: success: {:?}", res);
-                //                self.debug_file().await;
+                self.debug_file().await;
             }
             None => {
                 println!("[aof] no aof file - no append, this is ok");
