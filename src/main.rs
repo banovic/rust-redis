@@ -1670,7 +1670,7 @@ async fn main() {
 
     // Aof setup
     let aof = Aof::from_config(&config);
-    aof.init();
+    aof.init().await;
 
     // Store setup
     let (tx, rx) = mpsc::channel::<Envelope>(1024);
