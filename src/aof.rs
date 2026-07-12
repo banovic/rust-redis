@@ -131,10 +131,14 @@ impl Aof {
     }
 
     pub async fn append(&mut self, r: Resp) {
+        println!("[aof] writing resp: {:?}", r);
         match self.aof {
-            Some(ref mut file) => {
-                file.write_all(&r.get_bytes().unwrap()).await.unwrap();
-            }
+            Some(ref mut file) => match r.get_bytes() {
+                Some(bytes) => {
+                    file.write_all(&bytes).await.unwrap();
+                }
+                None => {}
+            },
             None => {}
         }
     }
