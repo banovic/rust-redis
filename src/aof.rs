@@ -50,6 +50,8 @@ impl Aof {
             (config.appendfilename.clone(), None)
         };
 
+        println!("[aof] AOF Filename: {}", aof_filename);
+
         Aof {
             dir: config.dir.clone(),
             appendonly: config.appendonly.clone(),
