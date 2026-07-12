@@ -37,12 +37,14 @@ impl Aof {
             // Read AOF filename from manifest:
             let aof_filename = Aof::get_aof_filename(&mf_filename).await;
             // Open file for writing, appending:
+            let aof_absolute_filename =
+                format!("{}/{}/{}", config.dir, config.appenddirname, aof_filename);
             let file = OpenOptions::new()
                 .write(true)
                 .read(true)
                 .append(true)
                 .create(true)
-                .open(Path::new(&aof_filename))
+                .open(Path::new(&aof_absolute_filename))
                 .await
                 .unwrap();
             (aof_filename, Some(file))
