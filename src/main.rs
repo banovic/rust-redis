@@ -452,6 +452,15 @@ impl Store {
         // }
     }
 
+    fn command_subscribe(&mut self, client_id: ClientId, channels: &[String]) -> TryExecuteResult {
+        let rsp = Resp::array(vec![
+            Resp::bulk_string("subscribe"),
+            Resp::bulk_string(&channels[0].clone()),
+            Resp::integer(1),
+        ]);
+        TryExecuteResult::Done(rsp)
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -958,6 +967,8 @@ impl Store {
             Command::ConfigGet { parameter } => self.command_config_get(&parameter),
 
             Command::Keys { pattern } => self.command_keys(&pattern),
+
+            Command::Subscribe { channels } => self.command_subscribe(client_id, &channels),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

@@ -185,234 +185,237 @@ pub enum Command {
     Keys {
         pattern: String,
     },
+    Subscribe {
+        channels: Vec<String>,
+    },
 }
 
 impl Command {
     /// DEPRECATED
-    pub fn from_bytes(mut bs: VecDeque<Bytes>) -> Option<Command> {
-        let name = bs.pop_front()?;
+    // pub fn from_bytes(mut bs: VecDeque<Bytes>) -> Option<Command> {
+    //     let name = bs.pop_front()?;
 
-        match &name[..] {
-            b"ECHO" => match bs.pop_front() {
-                Some(message) => Some(Command::Echo { message }),
-                None => None,
-            },
-            b"PING" => Some(Command::Ping {
-                message: bs.pop_front(),
-            }),
-            b"SET" => match bs.len() {
-                2 => {
-                    let key = Key(bs.pop_front().unwrap());
-                    let value = bs.pop_front().unwrap();
-                    Some(Command::Set {
-                        key,
-                        value,
-                        ex: None,
-                        px: None,
-                    })
-                }
-                4 => {
-                    let key = Key(bs.pop_front().unwrap());
-                    let value = bs.pop_front().unwrap();
-                    let expx = bs.pop_front().unwrap();
-                    let tmp = bs.pop_front().unwrap();
-                    let (ttl, _) = integer::<u64>().parse(&tmp[..]).unwrap();
-                    let (ex, px) = match &expx[..] {
-                        b"EX" => (Some(ttl), None),
-                        b"PX" => (None, Some(ttl)),
-                        _ => (None, None),
-                    };
-                    Some(Command::Set { key, value, ex, px })
-                }
-                _ => None,
-            },
-            b"GET" => match bs.pop_front() {
-                Some(key) => Some(Command::Get { key: Key(key) }),
-                None => None,
-            },
-            // Lists
-            b"RPUSH" => match bs.len() {
-                0 | 1 => None,
-                _ => Some(Command::Rpush {
-                    key: Key(bs.pop_front().unwrap()),
-                    elements: Vec::from(bs),
-                }),
-            },
-            b"LRANGE" => {
-                let key = Key(bs.pop_front().unwrap());
-                let (start, _) = integer::<i32>().parse(&bs[0][..]).unwrap();
-                let (end, _) = integer::<i32>().parse(&bs[1][..]).unwrap();
-                Some(Command::Lrange { key, start, end })
-            }
-            b"LPUSH" => match bs.len() {
-                0 | 1 => None,
-                _ => Some(Command::Lpush {
-                    key: Key(bs.pop_front().unwrap()),
-                    elements: Vec::from(bs),
-                }),
-            },
-            b"LLEN" => match bs.pop_front() {
-                Some(key) => Some(Command::Llen { key: Key(key) }),
-                None => None,
-            },
-            b"LPOP" => {
-                let key = Key(bs.pop_front().unwrap());
-                let count = if bs.len() > 0 {
-                    let (c, _) = integer::<u32>().parse(&bs[0][..]).unwrap();
-                    Some(c)
-                } else {
-                    None
-                };
-                Some(Command::Lpop { key, count })
-            }
-            b"BLPOP" => {
-                let tmp = bs.pop_back().unwrap();
-                let (timeout, _) = float::<f64>().parse(&tmp[..]).unwrap();
-                let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
-                Some(Command::Blpop { keys, timeout })
-            }
-            // Streams
-            b"TYPE" => Some(Command::Type {
-                key: Key(bs.pop_front().unwrap()),
-            }),
-            b"XADD" => {
-                let key = Key(bs.pop_front().unwrap());
-                let id = parse_input_stream_id(&bs.pop_front().unwrap()).unwrap();
-                Some(Command::Xadd {
-                    key,
-                    id,
-                    field_values: Vec::from(bs),
-                })
-            }
-            b"XRANGE" => {
-                let key = Key(bs.pop_front().unwrap());
-                let s = &bs.pop_front().unwrap()[..];
-                let e = &bs.pop_front().unwrap()[..];
-                let start = if s.len() == 1 && s[0] == b'-' {
-                    (0, 1)
-                } else {
-                    let ((start_tid, _, start_sid), _) =
-                        and!(integer::<u64>(), byte(b'-'), integer::<u64>())
-                            .parse(s)
-                            .unwrap();
-                    (start_tid, start_sid)
-                };
-                let end = if e.len() == 1 && e[0] == b'+' {
-                    (u64::MAX, u64::MAX)
-                } else {
-                    let ((end_tid, _, end_sid), _) =
-                        and!(integer::<u64>(), byte(b'-'), integer::<u64>())
-                            .parse(e)
-                            .unwrap();
-                    (end_tid, end_sid)
-                };
-                Some(Command::Xrange { key, start, end })
-            }
-            b"XREAD" => {
-                let block = bs[0].to_ascii_uppercase() == b"BLOCK";
-                let milliseconds = if block {
-                    bs.pop_front(); // BLOCK
-                    let m = bs.pop_front().unwrap();
-                    let (ms, _) = integer::<u64>().parse(&m[..]).unwrap();
-                    Some(ms)
-                } else {
-                    None
-                };
+    //     match &name[..] {
+    //         b"ECHO" => match bs.pop_front() {
+    //             Some(message) => Some(Command::Echo { message }),
+    //             None => None,
+    //         },
+    //         b"PING" => Some(Command::Ping {
+    //             message: bs.pop_front(),
+    //         }),
+    //         b"SET" => match bs.len() {
+    //             2 => {
+    //                 let key = Key(bs.pop_front().unwrap());
+    //                 let value = bs.pop_front().unwrap();
+    //                 Some(Command::Set {
+    //                     key,
+    //                     value,
+    //                     ex: None,
+    //                     px: None,
+    //                 })
+    //             }
+    //             4 => {
+    //                 let key = Key(bs.pop_front().unwrap());
+    //                 let value = bs.pop_front().unwrap();
+    //                 let expx = bs.pop_front().unwrap();
+    //                 let tmp = bs.pop_front().unwrap();
+    //                 let (ttl, _) = integer::<u64>().parse(&tmp[..]).unwrap();
+    //                 let (ex, px) = match &expx[..] {
+    //                     b"EX" => (Some(ttl), None),
+    //                     b"PX" => (None, Some(ttl)),
+    //                     _ => (None, None),
+    //                 };
+    //                 Some(Command::Set { key, value, ex, px })
+    //             }
+    //             _ => None,
+    //         },
+    //         b"GET" => match bs.pop_front() {
+    //             Some(key) => Some(Command::Get { key: Key(key) }),
+    //             None => None,
+    //         },
+    //         // Lists
+    //         b"RPUSH" => match bs.len() {
+    //             0 | 1 => None,
+    //             _ => Some(Command::Rpush {
+    //                 key: Key(bs.pop_front().unwrap()),
+    //                 elements: Vec::from(bs),
+    //             }),
+    //         },
+    //         b"LRANGE" => {
+    //             let key = Key(bs.pop_front().unwrap());
+    //             let (start, _) = integer::<i32>().parse(&bs[0][..]).unwrap();
+    //             let (end, _) = integer::<i32>().parse(&bs[1][..]).unwrap();
+    //             Some(Command::Lrange { key, start, end })
+    //         }
+    //         b"LPUSH" => match bs.len() {
+    //             0 | 1 => None,
+    //             _ => Some(Command::Lpush {
+    //                 key: Key(bs.pop_front().unwrap()),
+    //                 elements: Vec::from(bs),
+    //             }),
+    //         },
+    //         b"LLEN" => match bs.pop_front() {
+    //             Some(key) => Some(Command::Llen { key: Key(key) }),
+    //             None => None,
+    //         },
+    //         b"LPOP" => {
+    //             let key = Key(bs.pop_front().unwrap());
+    //             let count = if bs.len() > 0 {
+    //                 let (c, _) = integer::<u32>().parse(&bs[0][..]).unwrap();
+    //                 Some(c)
+    //             } else {
+    //                 None
+    //             };
+    //             Some(Command::Lpop { key, count })
+    //         }
+    //         b"BLPOP" => {
+    //             let tmp = bs.pop_back().unwrap();
+    //             let (timeout, _) = float::<f64>().parse(&tmp[..]).unwrap();
+    //             let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
+    //             Some(Command::Blpop { keys, timeout })
+    //         }
+    //         // Streams
+    //         b"TYPE" => Some(Command::Type {
+    //             key: Key(bs.pop_front().unwrap()),
+    //         }),
+    //         b"XADD" => {
+    //             let key = Key(bs.pop_front().unwrap());
+    //             let id = parse_input_stream_id(&bs.pop_front().unwrap()).unwrap();
+    //             Some(Command::Xadd {
+    //                 key,
+    //                 id,
+    //                 field_values: Vec::from(bs),
+    //             })
+    //         }
+    //         b"XRANGE" => {
+    //             let key = Key(bs.pop_front().unwrap());
+    //             let s = &bs.pop_front().unwrap()[..];
+    //             let e = &bs.pop_front().unwrap()[..];
+    //             let start = if s.len() == 1 && s[0] == b'-' {
+    //                 (0, 1)
+    //             } else {
+    //                 let ((start_tid, _, start_sid), _) =
+    //                     and!(integer::<u64>(), byte(b'-'), integer::<u64>())
+    //                         .parse(s)
+    //                         .unwrap();
+    //                 (start_tid, start_sid)
+    //             };
+    //             let end = if e.len() == 1 && e[0] == b'+' {
+    //                 (u64::MAX, u64::MAX)
+    //             } else {
+    //                 let ((end_tid, _, end_sid), _) =
+    //                     and!(integer::<u64>(), byte(b'-'), integer::<u64>())
+    //                         .parse(e)
+    //                         .unwrap();
+    //                 (end_tid, end_sid)
+    //             };
+    //             Some(Command::Xrange { key, start, end })
+    //         }
+    //         b"XREAD" => {
+    //             let block = bs[0].to_ascii_uppercase() == b"BLOCK";
+    //             let milliseconds = if block {
+    //                 bs.pop_front(); // BLOCK
+    //                 let m = bs.pop_front().unwrap();
+    //                 let (ms, _) = integer::<u64>().parse(&m[..]).unwrap();
+    //                 Some(ms)
+    //             } else {
+    //                 None
+    //             };
 
-                assert!(
-                    bs[0].to_ascii_uppercase() == b"STREAMS",
-                    "Must have literal STREAM arg"
-                );
-                bs.pop_front(); // STREAMS
+    //             assert!(
+    //                 bs[0].to_ascii_uppercase() == b"STREAMS",
+    //                 "Must have literal STREAM arg"
+    //             );
+    //             bs.pop_front(); // STREAMS
 
-                // keys
-                let l = bs.len();
+    //             // keys
+    //             let l = bs.len();
 
-                assert!(l % 2 == 0, "Must have even number of keys and ids");
+    //             assert!(l % 2 == 0, "Must have even number of keys and ids");
 
-                let ids = bs
-                    .split_off(l / 2)
-                    .iter()
-                    .map(|id| parse_xread_stream_id_input(id).unwrap())
-                    .collect::<Vec<_>>();
+    //             let ids = bs
+    //                 .split_off(l / 2)
+    //                 .iter()
+    //                 .map(|id| parse_xread_stream_id_input(id).unwrap())
+    //                 .collect::<Vec<_>>();
 
-                let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
+    //             let keys = bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>();
 
-                assert!(
-                    ids.len() == keys.len(),
-                    "Must have same count of keys and ids"
-                );
+    //             assert!(
+    //                 ids.len() == keys.len(),
+    //                 "Must have same count of keys and ids"
+    //             );
 
-                Some(Command::Xread {
-                    keys,
-                    milliseconds,
-                    ids,
-                })
-            }
-            // Transactions
-            b"INCR" => Some(Command::Incr {
-                key: Key(bs.pop_front().unwrap()),
-            }),
-            b"MULTI" => Some(Command::Multi),
-            b"EXEC" => Some(Command::Exec),
-            b"DISCARD" => Some(Command::Discard),
-            // Optimistic locking
-            b"WATCH" => Some(Command::Watch {
-                keys: bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>(),
-            }),
-            b"UNWATCH" => Some(Command::Unwatch),
-            b"INFO" => Some(Command::Info {
-                section: bs.pop_front(),
-            }),
-            b"REPLCONF" => {
-                let next_token = bs.pop_front().unwrap();
-                match &next_token[..] {
-                    b"listening-port" => {
-                        let port_part = bs.pop_front().unwrap();
-                        let (port, _) = integer::<u16>().parse(&port_part).unwrap();
-                        Some(Command::ReplconfListeningPort { port })
-                    }
-                    b"capa" => Some(Command::ReplconfCapa {
-                        capabilites: bs.into(),
-                    }),
-                    b"GETACK" => {
-                        let star = bs.pop_front().unwrap();
-                        if star.len() == 1 && star[0] == b'*' {
-                            Some(Command::ReplconfGetAck)
-                        } else {
-                            None
-                        }
-                    }
-                    b"ACK" => {
-                        let ack_bytes_field = bs.pop_front().unwrap();
-                        let (ack_bytes, _) = integer::<u64>().parse(&ack_bytes_field).unwrap();
-                        Some(Command::ReplconfAck { ack_bytes })
-                    }
-                    _ => panic!("Unknown REPLCONF shape"),
-                }
-            }
-            b"PSYNC" => {
-                let replication_id = String::from_utf8(bs.pop_front().unwrap()).unwrap();
-                let offset_part = bs.pop_front().unwrap();
-                let (offset, _) = integer::<i64>().parse(&offset_part).unwrap();
-                Some(Command::Psync {
-                    replication_id,
-                    offset,
-                })
-            }
-            b"WAIT" => {
-                let numreplicas_field = bs.pop_front().unwrap();
-                let timeout_field = bs.pop_front().unwrap();
-                let (numreplicas, _) = integer::<u64>().parse(&numreplicas_field).unwrap();
-                let (timeout, _) = integer::<u64>().parse(&timeout_field).unwrap();
-                Some(Command::Wait {
-                    numreplicas,
-                    timeout,
-                })
-            }
-            _ => None,
-        }
-    }
+    //             Some(Command::Xread {
+    //                 keys,
+    //                 milliseconds,
+    //                 ids,
+    //             })
+    //         }
+    //         // Transactions
+    //         b"INCR" => Some(Command::Incr {
+    //             key: Key(bs.pop_front().unwrap()),
+    //         }),
+    //         b"MULTI" => Some(Command::Multi),
+    //         b"EXEC" => Some(Command::Exec),
+    //         b"DISCARD" => Some(Command::Discard),
+    //         // Optimistic locking
+    //         b"WATCH" => Some(Command::Watch {
+    //             keys: bs.iter().map(|k| Key(k.to_vec())).collect::<Vec<_>>(),
+    //         }),
+    //         b"UNWATCH" => Some(Command::Unwatch),
+    //         b"INFO" => Some(Command::Info {
+    //             section: bs.pop_front(),
+    //         }),
+    //         b"REPLCONF" => {
+    //             let next_token = bs.pop_front().unwrap();
+    //             match &next_token[..] {
+    //                 b"listening-port" => {
+    //                     let port_part = bs.pop_front().unwrap();
+    //                     let (port, _) = integer::<u16>().parse(&port_part).unwrap();
+    //                     Some(Command::ReplconfListeningPort { port })
+    //                 }
+    //                 b"capa" => Some(Command::ReplconfCapa {
+    //                     capabilites: bs.into(),
+    //                 }),
+    //                 b"GETACK" => {
+    //                     let star = bs.pop_front().unwrap();
+    //                     if star.len() == 1 && star[0] == b'*' {
+    //                         Some(Command::ReplconfGetAck)
+    //                     } else {
+    //                         None
+    //                     }
+    //                 }
+    //                 b"ACK" => {
+    //                     let ack_bytes_field = bs.pop_front().unwrap();
+    //                     let (ack_bytes, _) = integer::<u64>().parse(&ack_bytes_field).unwrap();
+    //                     Some(Command::ReplconfAck { ack_bytes })
+    //                 }
+    //                 _ => panic!("Unknown REPLCONF shape"),
+    //             }
+    //         }
+    //         b"PSYNC" => {
+    //             let replication_id = String::from_utf8(bs.pop_front().unwrap()).unwrap();
+    //             let offset_part = bs.pop_front().unwrap();
+    //             let (offset, _) = integer::<i64>().parse(&offset_part).unwrap();
+    //             Some(Command::Psync {
+    //                 replication_id,
+    //                 offset,
+    //             })
+    //         }
+    //         b"WAIT" => {
+    //             let numreplicas_field = bs.pop_front().unwrap();
+    //             let timeout_field = bs.pop_front().unwrap();
+    //             let (numreplicas, _) = integer::<u64>().parse(&numreplicas_field).unwrap();
+    //             let (timeout, _) = integer::<u64>().parse(&timeout_field).unwrap();
+    //             Some(Command::Wait {
+    //                 numreplicas,
+    //                 timeout,
+    //             })
+    //         }
+    //         _ => None,
+    //     }
+    // }
 
     pub fn from_resp(resp: &Resp) -> Option<Command> {
         //print!("Command from resp: {:?}", resp);
@@ -622,6 +625,13 @@ impl Command {
                 "KEYS" => Some(Command::Keys {
                     pattern: els[1].get_str().unwrap().to_string(),
                 }),
+                "SUBSCRIBE" => {
+                    let channels = els[1..]
+                        .iter()
+                        .map(|e| String::from_utf8(e.get_bytes().unwrap()).unwrap())
+                        .collect::<Vec<_>>();
+                    Some(Command::Subscribe { channels })
+                }
                 _ => None,
             }
         } else {
