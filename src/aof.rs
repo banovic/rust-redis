@@ -86,7 +86,7 @@ impl Aof {
     pub async fn create_manifest_file(mf_filename: &str, aof_base_filename: &str) {
         if !Path::exists(&Path::new(&mf_filename)) {
             let line = format!("file {} seq 1 type i", aof_base_filename);
-            let mut mf_file = File::create(mf_filename.clone()).await.unwrap();
+            let mut mf_file = File::create(mf_filename).await.unwrap();
             let _ = mf_file.write_all(line.as_bytes()).await.unwrap();
         }
     }
@@ -139,12 +139,12 @@ impl Aof {
     pub async fn get_initial_commands(&self) -> Vec<Command> {
         let mut out = Vec::new();
         if self.appendonly == "yes" {
-            let mf_filename = format!(
-                "{}/{}/{}.manifest",
+            // `appendfilename` already holds the resolved AOF data filename
+            // (from the manifest) as set in `from_config`.
+            let aof_filename = format!(
+                "{}/{}/{}",
                 self.dir, self.appenddirname, self.appendfilename
             );
-            let aof_base_filename = Aof::get_aof_filename(&mf_filename).await.unwrap();
-            let aof_filename = format!("{}/{}/{}", self.dir, self.appenddirname, aof_base_filename);
             let bytes = read(aof_filename).await.unwrap();
             let (resps, rest) = parse_resp(&bytes).unwrap();
             let commands = resps
