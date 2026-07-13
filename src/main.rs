@@ -47,6 +47,8 @@ mod rdb;
 use rdb::Rdb;
 mod aof;
 use aof::Aof;
+mod pubsub;
+use pubsub::PubSub;
 
 use crate::PrimitiveValue::List;
 use crate::command::{XreadStreamIdInput, next_stream_id};
@@ -117,6 +119,7 @@ struct Store {
     config: Config,
     // dir: String,
     // dbfilename: Option<String>,
+    pubsub: PubSub,
 }
 
 impl Store {
@@ -147,6 +150,7 @@ impl Store {
                 replica_acks: HashMap::new(),
                 pending_write_commands_for_wait: false,
                 config,
+                pubsub: PubSub::new(),
             },
         }
     }
@@ -196,6 +200,7 @@ impl Store {
             replica_acks: HashMap::new(),
             pending_write_commands_for_wait: false,
             config,
+            pubsub: PubSub::new(),
         }
     }
 
@@ -453,10 +458,13 @@ impl Store {
     }
 
     fn command_subscribe(&mut self, client_id: ClientId, channels: &[String]) -> TryExecuteResult {
+        for channel in channels {
+            self.pubsub.add_subscription(client_id, channel);
+        }
         let rsp = Resp::array(vec![
             Resp::bulk_string("subscribe"),
             Resp::bulk_string(&channels[0].clone()),
-            Resp::integer(1),
+            Resp::integer(self.pubsub.get_client_subscriptions(client_id) as i64),
         ]);
         TryExecuteResult::Done(rsp)
     }
