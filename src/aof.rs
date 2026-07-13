@@ -142,7 +142,8 @@ impl Aof {
                 "{}/{}/{}.manifest",
                 self.dir, self.appenddirname, self.appendfilename
             );
-            let aof_filename = Aof::get_aof_filename(&mf_filename).await.unwrap();
+            let aof_base_filename = Aof::get_aof_filename(&mf_filename).await.unwrap();
+            let aof_filename = format!("{}/{}/{}", self.dir, self.appenddirname, aof_base_filename);
             let bytes = read(aof_filename).await.unwrap();
             let (resps, rest) = parse_resp(&bytes).unwrap();
             let commands = resps
