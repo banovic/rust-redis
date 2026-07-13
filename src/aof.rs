@@ -92,6 +92,7 @@ impl Aof {
     }
 
     pub async fn get_aof_filename(mf_filename: &str) -> Option<String> {
+        println!("[aof] MF: trying filename: {}", mf_filename);
         let mut mf_file = File::open(&Path::new(&mf_filename)).await.unwrap();
         let mut buffer = String::new();
         let _ = mf_file.read_to_string(&mut buffer).await.unwrap();
