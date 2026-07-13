@@ -1012,6 +1012,11 @@ async fn run_store(
     mut rx: mpsc::Receiver<Envelope>,
     tx: mpsc::Sender<Envelope>,
 ) {
+    // On startup - no replication yet
+    for command in aof.get_initial_commands().await {
+        store.try_execute(0, command);
+    }
+
     while let Some(e) = rx.recv().await {
         match e {
             Envelope::WithReply {

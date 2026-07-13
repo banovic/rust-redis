@@ -1,11 +1,15 @@
 use std::path::Path;
 
 use tokio::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File, OpenOptions, read},
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-use crate::{Config, resp::Resp};
+use crate::{
+    Config,
+    command::Command,
+    resp::{Resp, parse_resp},
+};
 
 #[derive(Debug)]
 pub struct Aof {
@@ -35,7 +39,7 @@ impl Aof {
             Aof::create_manifest_file(&mf_filename, &base_filename).await;
 
             // Read AOF filename from manifest:
-            let aof_filename = Aof::get_aof_filename(&mf_filename).await;
+            let aof_filename = Aof::get_aof_filename(&mf_filename).await.unwrap();
             // Open file for writing, appending:
             let aof_absolute_filename =
                 format!("{}/{}/{}", config.dir, config.appenddirname, aof_filename);
@@ -51,8 +55,6 @@ impl Aof {
         } else {
             (config.appendfilename.clone(), None)
         };
-
-        println!("[aof] AOF Filename: {}", aof_filename);
 
         Aof {
             dir: config.dir.clone(),
@@ -89,13 +91,20 @@ impl Aof {
         }
     }
 
-    pub async fn get_aof_filename(mf_filename: &str) -> String {
+    pub async fn get_aof_filename(mf_filename: &str) -> Option<String> {
         let mut mf_file = File::open(&Path::new(&mf_filename)).await.unwrap();
         let mut buffer = String::new();
         let _ = mf_file.read_to_string(&mut buffer).await.unwrap();
-        let aof_filename = buffer.split(' ').nth(1).unwrap();
-        println!("[aof] read aof file from manifest: {}", aof_filename);
-        aof_filename.to_string()
+        for l in buffer.lines() {
+            let mut parts = l.split(' ');
+            match (parts.nth(1), parts.nth(5)) {
+                (Some(aof_filename), Some(t)) if t == "i" => {
+                    return Some(aof_filename.to_string());
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     pub async fn debug_file(&mut self) {
@@ -122,5 +131,24 @@ impl Aof {
                 // println!("[aof] no aof file - no append, this is ok");
             }
         }
+    }
+
+    pub async fn get_initial_commands(&self) -> Vec<Command> {
+        let mut out = Vec::new();
+        if self.appendonly == "yes" {
+            let mf_filename = format!(
+                "{}/{}/{}.manifest",
+                self.dir, self.appenddirname, self.appendfilename
+            );
+            let aof_filename = Aof::get_aof_filename(&mf_filename).await.unwrap();
+            let bytes = read(aof_filename).await.unwrap();
+            let (resps, rest) = parse_resp(&bytes).unwrap();
+            let commands = resps
+                .iter()
+                .map(|r| Command::from_resp(r).unwrap())
+                .collect::<Vec<_>>();
+            return commands;
+        }
+        out
     }
 }
