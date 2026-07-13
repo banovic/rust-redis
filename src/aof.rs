@@ -97,10 +97,10 @@ impl Aof {
         let _ = mf_file.read_to_string(&mut buffer).await.unwrap();
         println!("[aof] MF: file: {}", buffer);
         for l in buffer.lines() {
-            let mut parts = l.split(' ');
+            let mut parts = l.split(' ').collect::<Vec<_>>();
             println!("[aof] MF: parts: {:?}", parts);
-            match (parts.nth(1), parts.nth(5)) {
-                (Some(aof_filename), Some(t)) if t == "i" => {
+            match (parts.get(1), parts.get(5)) {
+                (Some(aof_filename), Some(t)) if *t == "i" => {
                     return Some(aof_filename.to_string());
                 }
                 _ => {}
