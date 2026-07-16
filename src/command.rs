@@ -194,6 +194,12 @@ pub enum Command {
     Unsubscribe {
         channels: Vec<String>,
     },
+    // Sorted sets
+    Zadd {
+        key: String,
+        score: f64,
+        member: String,
+    },
 }
 
 impl Command {
@@ -233,6 +239,7 @@ impl Command {
             Command::Subscribe { .. } => "subscribe",
             Command::Publish { .. } => "publish",
             Command::Unsubscribe { .. } => "unsubscribe",
+            Command::Zadd { .. } => "zadd",
         }
     }
 
@@ -688,6 +695,12 @@ impl Command {
                         .map(|e| String::from_utf8(e.get_bytes().unwrap()).unwrap())
                         .collect::<Vec<_>>();
                     Some(Command::Unsubscribe { channels })
+                }
+                "ZADD" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let score = els[2].get_str().unwrap().parse::<f64>().unwrap();
+                    let member = els[3].get_str().unwrap().to_string();
+                    Some(Command::Zadd { key, score, member })
                 }
                 _ => None,
             }

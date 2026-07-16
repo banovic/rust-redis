@@ -2,7 +2,6 @@
 //use clap::Parser;
 use core::{num, str};
 use futures::channel::oneshot;
-use std::f32::consts::E;
 //use futures::future::select_all;
 use std::collections::HashSet;
 use std::env;
@@ -51,6 +50,8 @@ mod pubsub;
 use pubsub::PubSub;
 mod client;
 use client::ClientRunMode;
+mod sorted_sets;
+use sorted_sets::{SafeFloat, SortedSets};
 
 use crate::PrimitiveValue::List;
 use crate::client::ClientDispatch;
@@ -128,6 +129,7 @@ struct Store {
     // dir: String,
     // dbfilename: Option<String>,
     pubsub: PubSub,
+    sorted_sets: SortedSets,
 }
 
 impl Store {
@@ -160,6 +162,7 @@ impl Store {
                 pending_write_commands_for_wait: false,
                 config,
                 pubsub: PubSub::new(),
+                sorted_sets: SortedSets::new(),
             },
         }
     }
@@ -211,6 +214,7 @@ impl Store {
             pending_write_commands_for_wait: false,
             config,
             pubsub: PubSub::new(),
+            sorted_sets: SortedSets::new(),
         }
     }
 
@@ -542,6 +546,17 @@ impl Store {
             Resp::integer(self.pubsub.get_client_subscriptions(client_id) as i64),
         ]);
         TryExecuteResult::Done(rsp)
+    }
+
+    fn command_zadd(
+        &mut self,
+        client_id: ClientId,
+        key: &String,
+        score: f64,
+        member: &String,
+    ) -> TryExecuteResult {
+        self.sorted_sets.insert(key, score, member);
+        TryExecuteResult::Done(Resp::Integer(1))
     }
 
     // Pure, sync
