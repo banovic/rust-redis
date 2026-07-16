@@ -66,6 +66,7 @@ impl ClientRunMode {
             }
 
             // Subscription commands
+            (Subscription, command @ Subscribe { .. }) => (Subscription, Execute(command)),
             (Subscription, command) => (
                 Subscription,
                 Reply(Resp::simple_error(&format!(
