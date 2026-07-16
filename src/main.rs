@@ -511,7 +511,6 @@ impl Store {
         channel: &str,
         message: &str,
     ) -> TryExecuteResult {
-        let r = self.pubsub.publish(client_id, channel, message);
         let resp = Resp::array(vec![
             Resp::bulk_string("message"),
             Resp::bulk_string(channel),
@@ -525,7 +524,24 @@ impl Store {
                 }
             }
         }
-        TryExecuteResult::Done(Resp::Integer(r as i64))
+        let c = self.pubsub.get_client_subscriptions(client_id);
+        TryExecuteResult::Done(Resp::Integer(c as i64))
+    }
+
+    fn command_unsubscribe(
+        &mut self,
+        client_id: ClientId,
+        channels: &Vec<String>,
+    ) -> TryExecuteResult {
+        for channel in channels {
+            self.pubsub.unsubscribe(client_id, channel);
+        }
+        let rsp = Resp::array(vec![
+            Resp::bulk_string("subscribe"),
+            Resp::bulk_string(&channels[0].clone()),
+            Resp::integer(self.pubsub.get_client_subscriptions(client_id) as i64),
+        ]);
+        TryExecuteResult::Done(rsp)
     }
 
     // Pure, sync
@@ -1042,6 +1058,8 @@ impl Store {
             Command::Publish { channel, message } => {
                 self.command_publish(client_id, &channel, &message)
             }
+
+            Command::Unsubscribe { channels } => self.command_unsubscribe(client_id, &channels),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

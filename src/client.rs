@@ -5,7 +5,7 @@ use crate::{
     },
     command::Command::{
         self, Discard, Echo, Exec, Multi, Ping, Psync, Publish, ReplconfAck, ReplconfCapa,
-        ReplconfListeningPort, Subscribe, Watch,
+        ReplconfListeningPort, Subscribe, Unsubscribe, Watch,
     },
     resp::Resp,
 };
@@ -78,6 +78,7 @@ impl ClientRunMode {
             ),
             (Subscription, command @ Publish { .. }) => (Subscription, Execute(command)),
             (Subscription, command @ Subscribe { .. }) => (Subscription, Execute(command)),
+            (Subscription, command @ Unsubscribe { .. }) => (Subscription, Execute(command)),
             (Subscription, command) => (
                 Subscription,
                 Reply(Resp::simple_error(&format!(

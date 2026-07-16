@@ -191,6 +191,9 @@ pub enum Command {
         channel: String,
         message: String,
     },
+    Unsubscribe {
+        channels: Vec<String>,
+    },
 }
 
 impl Command {
@@ -229,6 +232,7 @@ impl Command {
             Command::Keys { .. } => "keys",
             Command::Subscribe { .. } => "subscribe",
             Command::Publish { .. } => "publish",
+            Command::Unsubscribe { .. } => "unsubscribe",
         }
     }
 
@@ -677,6 +681,13 @@ impl Command {
                     let channel = els[1].get_str().unwrap().to_string();
                     let message = els[2].get_str().unwrap().to_string();
                     Some(Command::Publish { channel, message })
+                }
+                "UNSUBSCRIBE" => {
+                    let channels = els[1..]
+                        .iter()
+                        .map(|e| String::from_utf8(e.get_bytes().unwrap()).unwrap())
+                        .collect::<Vec<_>>();
+                    Some(Command::Unsubscribe { channels })
                 }
                 _ => None,
             }
