@@ -1076,6 +1076,10 @@ impl Store {
 
             Command::Unsubscribe { channels } => self.command_unsubscribe(client_id, &channels),
 
+            Command::Zadd { key, score, member } => {
+                self.command_zadd(client_id, &key, score, &member)
+            }
+
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
     }
