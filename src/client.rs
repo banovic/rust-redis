@@ -69,6 +69,13 @@ impl ClientRunMode {
             }
 
             // Subscription commands
+            (Subscription, Ping { .. }) => (
+                Subscription,
+                Reply(Resp::Array(vec![
+                    Resp::bulk_string("PONG"),
+                    Resp::bulk_string(""),
+                ])),
+            ),
             (Subscription, command @ Subscribe { .. }) => (Subscription, Execute(command)),
             (Subscription, command) => (
                 Subscription,
