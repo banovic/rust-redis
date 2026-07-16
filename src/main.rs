@@ -102,10 +102,14 @@ enum TryExecuteResult {
 #[derive(Debug)]
 struct Store {
     is_replica: bool,
+    // Clients - by client id, value is pair: whether client is replica or not (default not),
+    // and channel on which client will receive store push messages
+    clients: HashMap<ClientId, (bool, mpsc::Sender<StorePush>)>,
+
     // Since replicas are also clients of master (ie. sub-process inside same master process),
     // key is client id, and value is channel to that client/replica sub-process; channel works
     // with pair: command for replica and optional channel to send result back to master process.
-    replicas: HashMap<ClientId, mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>>,
+    //replicas: HashMap<ClientId, mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>>,
     data: HashMap<Key, Value>,
     waiter_id: WaiterId,
     watched_keys: HashMap<Key, HashSet<usize>>,
@@ -143,7 +147,8 @@ impl Store {
             Some(db) => Self::from_rdb(is_replica, config, &db),
             None => Self {
                 is_replica,
-                replicas: HashMap::new(),
+                clients: HashMap::new(),
+                //replicas: HashMap::new(),
                 data: HashMap::new(),
                 waiter_id: 0,
                 watched_keys: HashMap::new(),
@@ -193,7 +198,8 @@ impl Store {
 
         Self {
             is_replica,
-            replicas: HashMap::new(),
+            clients: HashMap::new(),
+            //            replicas: HashMap::new(),
             data,
             waiter_id: 0,
             watched_keys: HashMap::new(),
@@ -243,8 +249,14 @@ impl Store {
     // How many replicas have acked an offset >= target. With no writes pending
     // (target == 0) every connected replica is caught up by definition.
     fn count_acked(&self, master_ack: u64) -> u64 {
+        let replicas_count = self
+            .clients
+            .values()
+            .filter(|(is_replica, _)| *is_replica)
+            .count();
+
         if master_ack == 0 {
-            return self.replicas.len() as u64;
+            return replicas_count as u64;
         }
         self.replica_acks
             .values()
@@ -500,6 +512,19 @@ impl Store {
         message: &str,
     ) -> TryExecuteResult {
         let r = self.pubsub.publish(client_id, channel, message);
+        let resp = Resp::array(vec![
+            Resp::bulk_string("message"),
+            Resp::bulk_string(channel),
+            Resp::bulk_string(message),
+        ]);
+        let push = StorePush::Message(resp);
+        if let Some(clients) = self.pubsub.subscriptions.get(channel) {
+            for client_id in clients {
+                if let Some((_, tx)) = self.clients.get(client_id) {
+                    let _ = tx.try_send(push.clone());
+                }
+            }
+        }
         TryExecuteResult::Done(Resp::Integer(r as i64))
     }
 
@@ -1023,6 +1048,14 @@ impl Store {
     }
 }
 
+// Messages that Server (store) sends to connected Clients (either replicas, or just subscribed)
+#[derive(Debug, Clone)]
+enum StorePush {
+    Replicate(Command),
+    Message(Resp),
+}
+
+#[derive(Debug)]
 enum Envelope {
     WithReply {
         client_id: usize,
@@ -1037,7 +1070,6 @@ enum Envelope {
     },
     AddReplica {
         client_id: usize,
-        tx: mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>,
         // Need to reply back: replication_id (fixed for now) and RDB, this is just for rDB for now
         reply_channel: oneshot::Sender<Resp>,
     },
@@ -1055,6 +1087,13 @@ enum Envelope {
     //     client_id: usize,
     //     ack_bytes: u64,
     // },
+    RegisterClient {
+        client_id: ClientId,
+        tx: mpsc::Sender<StorePush>,
+    },
+    UnregisterClient {
+        client_id: ClientId,
+    },
 }
 
 // This layer handles timeouts
@@ -1101,12 +1140,16 @@ async fn run_store(
                             // if let Some(encoded) = replication_command.encode_to_bytes() {
                             //     store.master_repl_offset += encoded.len() as u64;
                             // }
-                            for (client_id, tx) in &store.replicas {
-                                println!(
-                                    "[client_id = {}] Replicating command: {:?}",
-                                    client_id, replication_command
-                                );
-                                let _ = tx.send((replication_command.clone(), None)).await;
+                            for (client_id, (is_replica, tx)) in &store.clients {
+                                if *is_replica {
+                                    println!(
+                                        "[client_id = {}] Replicating command: {:?}",
+                                        client_id, replication_command
+                                    );
+                                    let _ = tx
+                                        .send(StorePush::Replicate(replication_command.clone()))
+                                        .await;
+                                }
                             }
                         }
                     }
@@ -1136,8 +1179,12 @@ async fn run_store(
                     }
                     TryExecuteResult::WaitCommand(waiter_id, numreplicas, timeout) => {
                         if store.pending_write_commands_for_wait {
-                            for (_client_id, replica_tx) in &store.replicas {
-                                let _ = replica_tx.send((Command::ReplconfGetAck, None)).await;
+                            for (_client_id, (is_replica, replica_tx)) in &store.clients {
+                                if *is_replica {
+                                    let _ = replica_tx
+                                        .send(StorePush::Replicate(Command::ReplconfGetAck))
+                                        .await;
+                                }
                             }
                             store.pending_write_commands_for_wait = false;
                         }
@@ -1211,12 +1258,14 @@ async fn run_store(
             // }
             Envelope::AddReplica {
                 client_id,
-                tx: replica_tx,
                 reply_channel,
             } => {
                 // A newly connected replica is not an acknowledgement of pending writes,
                 // so it does not resolve any in-flight WAIT.
-                store.replicas.insert(client_id, replica_tx);
+                store
+                    .clients
+                    .entry(client_id)
+                    .and_modify(|(is_replica, _)| *is_replica = true);
                 let rdb = Resp::file(store.to_rdb().serialize());
                 reply_channel.send(rdb);
             }
@@ -1242,6 +1291,13 @@ async fn run_store(
                     }
                 };
             }
+            Envelope::RegisterClient { client_id, tx } => {
+                store.clients.insert(client_id, (false, tx));
+            }
+            Envelope::UnregisterClient { client_id } => {
+                store.clients.remove(&client_id);
+                store.replica_acks.remove(&client_id);
+            }
         }
     }
 }
@@ -1255,7 +1311,12 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
     let mut is_subscribe_mode = false;
 
     // Channel to this client, so master can send commands for replication
-    let (tx, mut rx) = mpsc::channel::<(Command, Option<oneshot::Sender<Resp>>)>(1024);
+    let (tx, mut rx) = mpsc::channel::<StorePush>(1024);
+
+    // Register this client for receiveing messages from server/store
+    let _ = store_tx
+        .send(Envelope::RegisterClient { client_id, tx })
+        .await;
 
     // Initial state / mode for client:
     let mut mode = ClientRunMode::Normal;
@@ -1297,7 +1358,7 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
                                 },
                                 ClientDispatch::StartReplica(command) => {
                                     let (reply_tx, reply_rx) = oneshot::channel::<Resp>();
-                                    let envelope = Envelope::AddReplica { client_id, tx: tx.clone(), reply_channel: reply_tx};
+                                    let envelope = Envelope::AddReplica { client_id, reply_channel: reply_tx};
                                     let _ = store_tx.send(envelope).await;
                                     let rdb = reply_rx.await.unwrap();
                                     let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
@@ -1401,16 +1462,26 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
                     }
                 }
             },
-            replicate_command = rx.recv() => {
+            store_push = rx.recv() => {
                 // Command received from master, encode it and send it to client / replica
                 // (this is all happening on master, this is process inside master / server)
-                println!("Replica (master process, client connection handler) received command: {:?}", replicate_command);
-                if let Some((command, _reply_tx)) = replicate_command {
-                    write_command_to_stream(&mut stream, &command).await;
+                println!("(master process, client connection handler) received store push message: {:?}", store_push);
+                match store_push.unwrap() {
+                    StorePush::Replicate(command) => {
+                        write_command_to_stream(&mut stream, &command).await;
+                    },
+                    StorePush::Message(resp) => {
+                        write_resp(&mut stream, &resp).await;
+                    }
                 }
             }
         }
     }
+
+    // De-register this client from server/store
+    store_tx
+        .send(Envelope::UnregisterClient { client_id })
+        .await;
 
     println!("Client {} disconnected", client_id);
 }

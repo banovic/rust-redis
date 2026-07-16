@@ -4,7 +4,7 @@ use crate::ClientId;
 
 #[derive(Debug)]
 pub struct PubSub {
-    subscriptions: HashMap<String, HashSet<ClientId>>,
+    pub subscriptions: HashMap<String, HashSet<ClientId>>,
 }
 
 impl PubSub {
