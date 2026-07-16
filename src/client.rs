@@ -1,19 +1,21 @@
 use crate::{
     client::{
-        ClientDispatch::{Execute, Reply, StartReplica},
+        ClientDispatch::{Execute, ExecuteNoReply, Reply, StartReplica},
         ClientRunMode::{Normal, Subscription, Transaction},
     },
     command::Command::{
-        self, Discard, Echo, Exec, Multi, Ping, Psync, ReplconfCapa, ReplconfListeningPort,
-        Subscribe, Watch,
+        self, Discard, Echo, Exec, Multi, Ping, Psync, ReplconfAck, ReplconfCapa,
+        ReplconfListeningPort, Subscribe, Watch,
     },
     resp::Resp,
 };
 
 pub enum ClientDispatch {
-    // Let store execute command
+    // Store executes command and returns reply (resp) back to the client
     Execute(Command),
-    // Immediate reply
+    // Store executes command, but no reply; client does not await on any reply from store
+    ExecuteNoReply(Command),
+    // Immediate reply, without store processing
     Reply(Resp),
     // Start this client as replica
     StartReplica(Command),
@@ -47,6 +49,7 @@ impl ClientRunMode {
                 Normal,
                 Reply(Resp::simple_error("ERR DISCARD without MULTI")),
             ),
+            (Normal, command @ ReplconfAck { .. }) => (Normal, ExecuteNoReply(command)),
             (Normal, command @ Subscribe { .. }) => (Subscription, Execute(command)),
             (Normal, command) => (Normal, Execute(command)),
 

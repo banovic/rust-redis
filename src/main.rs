@@ -97,6 +97,7 @@ enum TryExecuteResult {
     BlockingXread(WaiterId, Vec<Key>, Vec<(u64, u64)>),
     BlockingBlpop(WaiterId, Vec<Key>),
     WaitCommand(WaiterId, u64, u64),
+    None, // do nothing, noop
 }
 #[derive(Debug)]
 struct Store {
@@ -470,6 +471,26 @@ impl Store {
             Resp::integer(self.pubsub.get_client_subscriptions(client_id) as i64),
         ]);
         TryExecuteResult::Done(rsp)
+    }
+
+    fn command_replconf_ack(&mut self, client_id: ClientId, ack_bytes: u64) -> TryExecuteResult {
+        self.replica_acks.insert(client_id, ack_bytes);
+
+        // Complete any WAIT whose threshold is now met.
+        let done: Vec<WaiterId> = self
+            .wait_waiters
+            .iter()
+            .filter(|(_, (_, numreplicas, target))| self.count_acked(*target) >= *numreplicas)
+            .map(|(waiter_id, _)| *waiter_id)
+            .collect();
+
+        for waiter_id in done {
+            let (reply_channel, _numreplicas, target) =
+                self.wait_waiters.remove(&waiter_id).unwrap();
+            let _ = reply_channel.send(Resp::Integer(self.count_acked(target) as i64));
+        }
+
+        TryExecuteResult::None
     }
 
     // Pure, sync
@@ -981,6 +1002,8 @@ impl Store {
 
             Command::Subscribe { channels } => self.command_subscribe(client_id, &channels),
 
+            Command::ReplconfAck { ack_bytes } => self.command_replconf_ack(client_id, ack_bytes),
+
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
     }
@@ -1014,10 +1037,10 @@ enum Envelope {
     WaitCommandTimeout {
         waiter_id: WaiterId,
     },
-    ReplconfAck {
-        client_id: usize,
-        ack_bytes: u64,
-    },
+    // ReplconfAck {
+    //     client_id: usize,
+    //     ack_bytes: u64,
+    // },
 }
 
 // This layer handles timeouts
@@ -1127,6 +1150,7 @@ async fn run_store(
                         //     }
                         // }
                     }
+                    TryExecuteResult::None => {}
                 }
             }
             Envelope::TimeoutXread { waiter_id } => {
@@ -1149,28 +1173,28 @@ async fn run_store(
                     let _ = reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
                 }
             }
-            Envelope::ReplconfAck {
-                client_id,
-                ack_bytes,
-            } => {
-                store.replica_acks.insert(client_id, ack_bytes);
+            // Envelope::ReplconfAck {
+            //     client_id,
+            //     ack_bytes,
+            // } => {
+            //     store.replica_acks.insert(client_id, ack_bytes);
 
-                // Complete any WAIT whose threshold is now met.
-                let done: Vec<WaiterId> = store
-                    .wait_waiters
-                    .iter()
-                    .filter(|(_, (_, numreplicas, target))| {
-                        store.count_acked(*target) >= *numreplicas
-                    })
-                    .map(|(waiter_id, _)| *waiter_id)
-                    .collect();
+            //     // Complete any WAIT whose threshold is now met.
+            //     let done: Vec<WaiterId> = store
+            //         .wait_waiters
+            //         .iter()
+            //         .filter(|(_, (_, numreplicas, target))| {
+            //             store.count_acked(*target) >= *numreplicas
+            //         })
+            //         .map(|(waiter_id, _)| *waiter_id)
+            //         .collect();
 
-                for waiter_id in done {
-                    let (reply_channel, _numreplicas, target) =
-                        store.wait_waiters.remove(&waiter_id).unwrap();
-                    let _ = reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
-                }
-            }
+            //     for waiter_id in done {
+            //         let (reply_channel, _numreplicas, target) =
+            //             store.wait_waiters.remove(&waiter_id).unwrap();
+            //         let _ = reply_channel.send(Resp::Integer(store.count_acked(target) as i64));
+            //     }
+            // }
             Envelope::AddReplica {
                 client_id,
                 tx: replica_tx,
@@ -1248,6 +1272,11 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
                                         Err(e) => panic!("Something wrong with processing command: {:?}", e),
                                     };
                                     let _ = write_resp(&mut stream, &resp).await;
+                                },
+                                ClientDispatch::ExecuteNoReply(command) => {
+                                    let (reply_tx, reply_rx) = oneshot::channel::<Resp>();
+                                    let envelope = Envelope::WithReply { client_id, command, reply_channel: reply_tx };
+                                    let _ = store_tx.send(envelope).await;
                                 },
                                 ClientDispatch::Reply(resp) => {
                                     let _ = write_resp(&mut stream, &resp).await;
