@@ -157,7 +157,6 @@ pub enum Command {
     InternalExecuteTx {
         commands: Vec<Command>,
     },
-    InternalDiscardTx,
     Info {
         section: Option<Bytes>,
     },
@@ -191,6 +190,43 @@ pub enum Command {
 }
 
 impl Command {
+    /// Canonical command name, lowercase, for error messages.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::Echo { .. } => "echo",
+            Command::Ping { .. } => "ping",
+            Command::Set { .. } => "set",
+            Command::Get { .. } => "get",
+            Command::Rpush { .. } => "rpush",
+            Command::Lrange { .. } => "lrange",
+            Command::Lpush { .. } => "lpush",
+            Command::Llen { .. } => "llen",
+            Command::Lpop { .. } => "lpop",
+            Command::Blpop { .. } => "blpop",
+            Command::Type { .. } => "type",
+            Command::Xadd { .. } => "xadd",
+            Command::Xrange { .. } => "xrange",
+            Command::Xread { .. } => "xread",
+            Command::Incr { .. } => "incr",
+            Command::Multi => "multi",
+            Command::Exec => "exec",
+            Command::Discard => "discard",
+            Command::Watch { .. } => "watch",
+            Command::Unwatch => "unwatch",
+            Command::InternalExecuteTx { .. } => "exec",
+            Command::Info { .. } => "info",
+            Command::ReplconfListeningPort { .. }
+            | Command::ReplconfCapa { .. }
+            | Command::ReplconfGetAck
+            | Command::ReplconfAck { .. } => "replconf",
+            Command::Psync { .. } => "psync",
+            Command::Wait { .. } => "wait",
+            Command::ConfigGet { .. } => "config|get",
+            Command::Keys { .. } => "keys",
+            Command::Subscribe { .. } => "subscribe",
+        }
+    }
+
     /// DEPRECATED
     // pub fn from_bytes(mut bs: VecDeque<Bytes>) -> Option<Command> {
     //     let name = bs.pop_front()?;

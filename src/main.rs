@@ -49,8 +49,11 @@ mod aof;
 use aof::Aof;
 mod pubsub;
 use pubsub::PubSub;
+mod client;
+use client::ClientRunMode;
 
 use crate::PrimitiveValue::List;
+use crate::client::ClientDispatch;
 use crate::command::{XreadStreamIdInput, next_stream_id};
 use crate::rdb::{RdbString, RdbValueExpiration};
 use crate::resp::parse_resp;
@@ -604,8 +607,8 @@ impl Store {
                 println!("tx: store2: {:?}", self);
                 TryExecuteResult::Done(Resp::Array(replies))
             }
-            Command::InternalDiscardTx => {
-                // Cleanup watched keys for this client, and return null array
+            Command::Discard => {
+                // Cleanup watched keys for this client, and return OK
                 for (_, clients) in &mut self.watched_keys {
                     clients.remove(&client_id);
                 }
@@ -983,13 +986,6 @@ impl Store {
     }
 }
 
-async fn write_resp(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
-    //let out = encode_reply(reply);
-    let result = stream.write_all(&resp.to_bytes()[..]).await;
-    let _ = stream.flush();
-    result
-}
-
 enum Envelope {
     WithReply {
         client_id: usize,
@@ -1006,7 +1002,7 @@ enum Envelope {
         client_id: usize,
         tx: mpsc::Sender<(Command, Option<oneshot::Sender<Resp>>)>,
         // Need to reply back: replication_id (fixed for now) and RDB, this is just for rDB for now
-        reply_channel: oneshot::Sender<Vec<u8>>,
+        reply_channel: oneshot::Sender<Resp>,
     },
     Replicate {
         command: Command,
@@ -1183,7 +1179,7 @@ async fn run_store(
                 // A newly connected replica is not an acknowledgement of pending writes,
                 // so it does not resolve any in-flight WAIT.
                 store.replicas.insert(client_id, replica_tx);
-                let rdb = store.to_rdb().serialize();
+                let rdb = Resp::file(store.to_rdb().serialize());
                 reply_channel.send(rdb);
             }
             // This is command execution on replica
@@ -1212,17 +1208,19 @@ async fn run_store(
     }
 }
 
-async fn handle_client(
-    client_id: usize,
-    mut stream: TcpStream,
-    producer_ch: mpsc::Sender<Envelope>,
-) {
+async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::Sender<Envelope>) {
     println!("Connected client {}", client_id);
     let mut queue: Option<VecDeque<Command>> = None; //VecDeque::new();
     let mut buffer = [0u8; 1024];
 
+    // id the client in subscribe mode?
+    let mut is_subscribe_mode = false;
+
     // Channel to this client, so master can send commands for replication
     let (tx, mut rx) = mpsc::channel::<(Command, Option<oneshot::Sender<Resp>>)>(1024);
+
+    // Initial state / mode for client:
+    let mut mode = ClientRunMode::Normal;
 
     loop {
         select! {
@@ -1233,98 +1231,126 @@ async fn handle_client(
                         break;
                     }
                     Ok(n) => {
-                        // print_buffer(&buffer, n);
-                        // buffer.fill(0u8);
-
-                        // Multiple commands can come together
-                        //let (input, _) = parse_input_resp(&buffer).unwrap();
                         let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
-                        //let commands = inputs.iter().map(|input| Command::from_bytes(input.to_words().clone()).unwrap()).collect::<Vec<_>>();
 
                         for input in inputs {
-                            //println!("INPUT: {:?}", input);
                             let command = Command::from_resp(&input).unwrap();
-                            match (&command, &mut queue) {
-                                (Command::ReplconfListeningPort { port: _ }, _) => {
-                                    let _ = write_resp(&mut stream, &Resp::SimpleString("OK".as_bytes().to_vec())).await;
-                                }
-                                (Command::ReplconfCapa { capabilites: _ }, _) => {
-                                    let _ = write_resp(&mut stream, &Resp::SimpleString("OK".as_bytes().to_vec())).await;
-                                }
-                                // Psync
-                                (
-                                    Command::Psync {
-                                        replication_id: _,
-                                        offset: _,
-                                    },
-                                    _,
-                                ) => {
-                                    // This client is replica!
-                                    let (reply_tx, reply_rx) = oneshot::channel::<Vec<u8>>();
-                                    // Start counting bytes sent to this channel now:
-                                    let _ = producer_ch.send(Envelope::AddReplica {client_id, tx: tx.clone(), reply_channel: reply_tx}).await;
+                            let (next_mode, dispatch ) = mode.run(command);
+                            mode = next_mode;
+
+                            match dispatch {
+                                ClientDispatch::Execute(command) => {
+                                    let (reply_tx, reply_rx) = oneshot::channel::<Resp>();
+                                    let envelope = Envelope::WithReply { client_id, command, reply_channel: reply_tx };
+                                    let _ = store_tx.send(envelope).await;
+                                    let resp = match reply_rx.await {
+                                        Ok(resp) => resp,
+                                        Err(e) => panic!("Something wrong with processing command: {:?}", e),
+                                    };
+                                    let _ = write_resp(&mut stream, &resp).await;
+                                },
+                                ClientDispatch::Reply(resp) => {
+                                    let _ = write_resp(&mut stream, &resp).await;
+                                },
+                                ClientDispatch::StartReplica(command) => {
+                                    let (reply_tx, reply_rx) = oneshot::channel::<Resp>();
+                                    let envelope = Envelope::AddReplica { client_id, tx: tx.clone(), reply_channel: reply_tx};
+                                    let _ = store_tx.send(envelope).await;
                                     let rdb = reply_rx.await.unwrap();
                                     let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
-                                    //let _ = write_resp(&mut stream, &Resp::File(decode_hex("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap())).await;
-                                    let _ = write_resp(&mut stream, &Resp::File(rdb)).await;
-                                },
-                                (Command::ReplconfAck { ack_bytes }, _) => {
-                                    let _ = producer_ch.send(Envelope::ReplconfAck { client_id, ack_bytes: *ack_bytes }).await;
+                                    let _ = write_resp(&mut stream, &rdb).await;
                                 }
-                                // Just echo
-                                (Command::Echo { message }, _) => {
-                                    let _ = write_resp(&mut stream, &Resp::BulkString(message.to_vec())).await;
-                                },
-                                (Command::Ping { message }, _) => {
-                                    match message {
-                                        Some(m) => {
-                                            let _ = write_resp(&mut stream, &Resp::BulkString(m.to_vec())).await;
-                                        },
-                                        None => {
-                                            let _ = write_resp(&mut stream, &Resp::SimpleString("PONG".as_bytes().to_vec())).await;
-                                        }
-                                    };
-                                },
-                                // Start tx
-                                (Command::Multi, None) => {
-                                    queue = Some(VecDeque::new());
-                                    let _ = write_resp(&mut stream, &Resp::simple_string("OK")).await;
-                                }
-                                (Command::Exec, Some(_)) => {
-                                    let commands = queue.take().unwrap();
-                                    let tx = Command::InternalExecuteTx {
-                                        commands: commands.into(),
-                                    };
-                                    let _ = write_resp(&mut stream, &execute_command(&producer_ch, client_id, tx).await).await;
-                                }
-                                (Command::Exec, None) => {
-                                    let _ = write_resp(&mut stream, &Resp::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
-                                },
-                                (Command::Watch { keys: _ }, Some(_)) => {
-                                    let _ = write_resp(&mut stream, &Resp::SimpleError(
-                                        "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
-                                    )).await;
-                                }
-                                (Command::Discard, None) => {
-                                    let _ = write_resp(&mut stream, &Resp::SimpleError(
-                                        "ERR DISCARD without MULTI".as_bytes().to_vec(),
-                                    )).await;
-                                }
-                                (Command::Discard, Some(_)) => {
-                                    queue = None;
-                                    let _ = write_resp(&mut stream, &execute_command(&producer_ch, client_id, Command::InternalDiscardTx).await).await;
-                                }
-
-                                // Inside tx
-                                (_, Some(q)) => {
-                                    q.push_back(command);
-                                    let _ = write_resp(&mut stream, &Resp::SimpleString("QUEUED".as_bytes().to_vec())).await;
-                                }
-                                (_, None) => {
-                                    let _ = write_resp(&mut stream, &execute_command(&producer_ch, client_id, command).await).await;
-                                }
-                            };
+                            }
                         }
+
+                        // for input in inputs {
+                        //     //println!("INPUT: {:?}", input);
+                        //     let command = Command::from_resp(&input).unwrap();
+                        //     match (&command, &mut queue) {
+                        //         // Replica handshake
+                        //         (Command::ReplconfListeningPort { port: _ }, _) => {
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleString("OK".as_bytes().to_vec())).await;
+                        //         }
+                        //         (Command::ReplconfCapa { capabilites: _ }, _) => {
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleString("OK".as_bytes().to_vec())).await;
+                        //         }
+                        //         // Psync
+                        //         (
+                        //             Command::Psync {
+                        //                 replication_id: _,
+                        //                 offset: _,
+                        //             },
+                        //             _,
+                        //         ) => {
+                        //             // This client is replica!
+                        //             let (reply_tx, reply_rx) = oneshot::channel::<Vec<u8>>();
+                        //             // Start counting bytes sent to this channel now:
+                        //             let _ = store_tx.send(Envelope::AddReplica {client_id, tx: tx.clone(), reply_channel: reply_tx}).await;
+                        //             let rdb = reply_rx.await.unwrap();
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
+                        //             let _ = write_resp(&mut stream, &Resp::File(rdb)).await;
+                        //         },
+                        //         (Command::ReplconfAck { ack_bytes }, _) => {
+                        //             let _ = store_tx.send(Envelope::ReplconfAck { client_id, ack_bytes: *ack_bytes }).await;
+                        //         }
+                        //         // Subscribe mode
+                        //         (Command::Subscribe { channels: _ }, _) => {
+                        //             is_subscribe_mode = true;
+                        //         }
+                        //         // Just echo
+                        //         (Command::Echo { message }, _) => {
+                        //             let _ = write_resp(&mut stream, &Resp::BulkString(message.to_vec())).await;
+                        //         },
+                        //         (Command::Ping { message }, _) => {
+                        //             match message {
+                        //                 Some(m) => {
+                        //                     let _ = write_resp(&mut stream, &Resp::BulkString(m.to_vec())).await;
+                        //                 },
+                        //                 None => {
+                        //                     let _ = write_resp(&mut stream, &Resp::SimpleString("PONG".as_bytes().to_vec())).await;
+                        //                 }
+                        //             };
+                        //         },
+                        //         // Start tx
+                        //         (Command::Multi, None) => {
+                        //             queue = Some(VecDeque::new());
+                        //             let _ = write_resp(&mut stream, &Resp::simple_string("OK")).await;
+                        //         }
+                        //         (Command::Exec, Some(_)) => {
+                        //             let commands = queue.take().unwrap();
+                        //             let tx = Command::InternalExecuteTx {
+                        //                 commands: commands.into(),
+                        //             };
+                        //             let _ = write_resp(&mut stream, &execute_command(&store_tx, client_id, tx).await).await;
+                        //         }
+                        //         (Command::Exec, None) => {
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleError("ERR EXEC without MULTI".as_bytes().to_vec())).await;
+                        //         },
+                        //         (Command::Watch { keys: _ }, Some(_)) => {
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleError(
+                        //                 "ERR WATCH inside MULTI is not allowed".as_bytes().to_vec(),
+                        //             )).await;
+                        //         }
+                        //         (Command::Discard, None) => {
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleError(
+                        //                 "ERR DISCARD without MULTI".as_bytes().to_vec(),
+                        //             )).await;
+                        //         }
+                        //         (Command::Discard, Some(_)) => {
+                        //             queue = None;
+                        //             let _ = write_resp(&mut stream, &execute_command(&store_tx, client_id, Command::Discard).await).await;
+                        //         }
+
+                        //         // Inside tx
+                        //         (_, Some(q)) => {
+                        //             q.push_back(command);
+                        //             let _ = write_resp(&mut stream, &Resp::SimpleString("QUEUED".as_bytes().to_vec())).await;
+                        //         }
+                        //         (_, None) => {
+                        //             let _ = write_resp(&mut stream, &execute_command(&store_tx, client_id, command).await).await;
+                        //         }
+                        //     };
+                        // }
                         buffer.fill(0u8);
                     }
                     Err(_) => {
@@ -1423,6 +1449,12 @@ async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
 }
 
 async fn write_resp_to_stream(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
+    let result = stream.write_all(&resp.to_bytes()[..]).await;
+    let _ = stream.flush();
+    result
+}
+
+async fn write_resp(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
     let result = stream.write_all(&resp.to_bytes()[..]).await;
     let _ = stream.flush();
     result
