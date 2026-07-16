@@ -493,6 +493,16 @@ impl Store {
         TryExecuteResult::None
     }
 
+    fn command_publish(
+        &mut self,
+        client_id: ClientId,
+        channel: &str,
+        message: &str,
+    ) -> TryExecuteResult {
+        let r = self.pubsub.publish(client_id, channel, message);
+        TryExecuteResult::Done(Resp::Integer(r as i64))
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1003,6 +1013,10 @@ impl Store {
             Command::Subscribe { channels } => self.command_subscribe(client_id, &channels),
 
             Command::ReplconfAck { ack_bytes } => self.command_replconf_ack(client_id, ack_bytes),
+
+            Command::Publish { channel, message } => {
+                self.command_publish(client_id, &channel, &message)
+            }
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

@@ -4,7 +4,7 @@ use crate::{
         ClientRunMode::{Normal, Subscription, Transaction},
     },
     command::Command::{
-        self, Discard, Echo, Exec, Multi, Ping, Psync, ReplconfAck, ReplconfCapa,
+        self, Discard, Echo, Exec, Multi, Ping, Psync, Publish, ReplconfAck, ReplconfCapa,
         ReplconfListeningPort, Subscribe, Watch,
     },
     resp::Resp,
@@ -76,6 +76,7 @@ impl ClientRunMode {
                     Resp::bulk_string(""),
                 ])),
             ),
+            (Subscription, command @ Publish { .. }) => (Subscription, Execute(command)),
             (Subscription, command @ Subscribe { .. }) => (Subscription, Execute(command)),
             (Subscription, command) => (
                 Subscription,

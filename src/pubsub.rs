@@ -32,4 +32,10 @@ impl PubSub {
         }
         c
     }
+
+    pub fn publish(&self, client_id: ClientId, channel: &str, message: &str) -> usize {
+        self.subscriptions
+            .get(&channel.to_string())
+            .map_or(0, |cs| cs.len())
+    }
 }

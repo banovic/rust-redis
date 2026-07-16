@@ -187,6 +187,10 @@ pub enum Command {
     Subscribe {
         channels: Vec<String>,
     },
+    Publish {
+        channel: String,
+        message: String,
+    },
 }
 
 impl Command {
@@ -224,6 +228,7 @@ impl Command {
             Command::ConfigGet { .. } => "config|get",
             Command::Keys { .. } => "keys",
             Command::Subscribe { .. } => "subscribe",
+            Command::Publish { .. } => "publish",
         }
     }
 
@@ -667,6 +672,11 @@ impl Command {
                         .map(|e| String::from_utf8(e.get_bytes().unwrap()).unwrap())
                         .collect::<Vec<_>>();
                     Some(Command::Subscribe { channels })
+                }
+                "PUBLISH" => {
+                    let channel = els[1].get_str().unwrap().to_string();
+                    let message = els[2].get_str().unwrap().to_string();
+                    Some(Command::Publish { channel, message })
                 }
                 _ => None,
             }
