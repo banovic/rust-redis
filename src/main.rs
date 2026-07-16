@@ -524,7 +524,7 @@ impl Store {
                 }
             }
         }
-        let c = self.pubsub.get_client_subscriptions(client_id);
+        let c = self.pubsub.subscribers_count(channel);
         TryExecuteResult::Done(Resp::Integer(c as i64))
     }
 
