@@ -537,7 +537,7 @@ impl Store {
             self.pubsub.unsubscribe(client_id, channel);
         }
         let rsp = Resp::array(vec![
-            Resp::bulk_string("subscribe"),
+            Resp::bulk_string("unsubscribe"),
             Resp::bulk_string(&channels[0].clone()),
             Resp::integer(self.pubsub.get_client_subscriptions(client_id) as i64),
         ]);
