@@ -684,6 +684,11 @@ impl Store {
         TryExecuteResult::Done(Resp::bulk_string("default"))
     }
 
+    fn command_acl_getuser(&self, username: &String) -> TryExecuteResult {
+        let res = Resp::array(vec![Resp::bulk_string("flags"), Resp::array(vec![])]);
+        TryExecuteResult::Done(res)
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1239,6 +1244,8 @@ impl Store {
             } => self.command_geosearch(&key, longitude, latitude, radius, &unit),
 
             Command::AclWhoami => self.command_acl_whoami(),
+
+            Command::AclGetuser { username } => self.command_acl_getuser(&username),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

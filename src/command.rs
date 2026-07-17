@@ -246,6 +246,9 @@ pub enum Command {
     },
     // Acl
     AclWhoami,
+    AclGetuser {
+        username: String,
+    },
 }
 
 impl Command {
@@ -296,6 +299,7 @@ impl Command {
             Command::Geodist { .. } => "geodist",
             Command::Geosearch { .. } => "geosearch",
             Command::AclWhoami => "aclwhoami",
+            Command::AclGetuser { .. } => "aclgetuser",
         }
     }
 
@@ -834,6 +838,10 @@ impl Command {
                 }
                 "ACL" => match els[1].get_str().unwrap() {
                     "WHOAMI" => Some(Command::AclWhoami),
+                    "GETUSER" => {
+                        let username = els[2].get_str().unwrap().to_string();
+                        Some(Command::AclGetuser { username })
+                    }
                     _ => None,
                 },
                 _ => None,
