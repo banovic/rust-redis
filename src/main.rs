@@ -610,7 +610,9 @@ impl Store {
                 longitude, latitude
             )))
         } else {
-            TryExecuteResult::Done(Resp::Integer(1))
+            let score = 0.0;
+            let r = self.sorted_sets.insert(key, score, member);
+            TryExecuteResult::Done(Resp::Integer(r as i64))
         }
     }
     // Pure, sync
