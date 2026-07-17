@@ -648,7 +648,7 @@ impl Store {
         ) {
             let coord1 = decode(score1 as u64);
             let coord2 = decode(score2 as u64);
-            let dist = haversine2(coord1, coord2);
+            let dist = haversine(coord1, coord2);
             TryExecuteResult::Done(Resp::bulk_string(&dist.to_string()))
         } else {
             TryExecuteResult::Done(Resp::NullBulkString)

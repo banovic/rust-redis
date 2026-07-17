@@ -85,35 +85,24 @@ pub fn encode(latitude: f64, longitude: f64) -> u64 {
     interleave(lat_int, lon_int)
 }
 
-pub fn haversine(origin: Coordinates, destination: Coordinates) -> f64 {
-    const R: f64 = 6372.8;
+/// Great-circle distance between two coordinates, in meters.
+///
+/// Mirrors Redis' `geohashGetDistance` (deps/geohash-int/geohash_helper.c):
+/// same Earth radius, and the same haversine formulation using
+/// `2 * R * asin(sqrt(a))` so results match Redis bit-for-bit.
+pub fn haversine(c1: Coordinates, c2: Coordinates) -> f64 {
+    // Earth radius in meters, identical to Redis' EARTH_RADIUS_IN_METERS.
+    const EARTH_RADIUS_IN_METERS: f64 = 6372797.560856;
 
-    let lat1 = origin.latitude.to_radians();
-    let lat2 = destination.latitude.to_radians();
-    let d_lat = lat2 - lat1;
-    let d_lon = (destination.longitude - origin.longitude).to_radians();
+    let lat1 = c1.latitude.to_radians();
+    let lon1 = c1.longitude.to_radians();
+    let lat2 = c2.latitude.to_radians();
+    let lon2 = c2.longitude.to_radians();
 
-    let a = (d_lat / 2.0).sin().powi(2) + (d_lon / 2.0).sin().powi(2) * lat1.cos() * lat2.cos();
-    let c = 2.0 * a.sqrt().asin();
-    R * c
+    let u = ((lat2 - lat1) / 2.0).sin();
+    let v = ((lon2 - lon1) / 2.0).sin();
+
+    let a = u * u + lat1.cos() * lat2.cos() * v * v;
+
+    2.0 * EARTH_RADIUS_IN_METERS * a.sqrt().asin()
 }
-pub fn haversine2(c1: Coordinates, c2: Coordinates) -> f64 {
-    let r = 6372797.560856; // earth radius in meters
-
-    let phi1 = c1.latitude.to_radians();
-    let phi2 = c2.latitude.to_radians();
-
-    let delta_phi = (c2.latitude - c1.latitude).to_radians();
-    let delta_lambda = (c2.longitude - c2.longitude).to_radians();
-
-    let a = (delta_phi / 2.0).sin().powi(2)
-        + phi1.cos() * phi2.cos() * (delta_lambda / 2.0).sin().powi(2);
-
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-
-    r * c // Distance in meters
-}
-// 33.67193741394504
-// 136.16958987072897
-// -54.14102928288558
-// -140.02333084533652
