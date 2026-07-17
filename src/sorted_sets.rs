@@ -113,4 +113,8 @@ impl SortedSets {
         }
         ms
     }
+
+    pub fn card(&self, key: &String) -> usize {
+        self.data.get(key).map_or(0, |set| set.len())
+    }
 }

@@ -209,6 +209,9 @@ pub enum Command {
         start: i32,
         stop: i32,
     },
+    Zcard {
+        key: String,
+    },
 }
 
 impl Command {
@@ -251,6 +254,7 @@ impl Command {
             Command::Zadd { .. } => "zadd",
             Command::Zrank { .. } => "zrank",
             Command::Zrange { .. } => "zrange",
+            Command::Zcard { .. } => "zcard",
         }
     }
 
@@ -723,6 +727,10 @@ impl Command {
                     let start = els[2].get_str().unwrap().parse::<i32>().unwrap();
                     let stop = els[3].get_str().unwrap().parse::<i32>().unwrap();
                     Some(Command::Zrange { key, start, stop })
+                }
+                "ZCARD" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    Some(Command::Zcard { key })
                 }
                 _ => None,
             }
