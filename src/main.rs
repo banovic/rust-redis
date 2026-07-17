@@ -648,11 +648,36 @@ impl Store {
         ) {
             let coord1 = decode(score1 as u64);
             let coord2 = decode(score2 as u64);
-            let dist = haversine(coord1, coord2);
+            let dist = haversine(&coord1, &coord2);
             TryExecuteResult::Done(Resp::bulk_string(&dist.to_string()))
         } else {
             TryExecuteResult::Done(Resp::NullBulkString)
         }
+    }
+
+    fn command_geosearch(
+        &mut self,
+        key: &String,
+        longitude: f64,
+        latitude: f64,
+        radius: f64,
+        unit: &String,
+    ) -> TryExecuteResult {
+        let mut finds = Vec::new();
+        let c1 = Coordinates {
+            longitude,
+            latitude,
+        };
+        assert!(unit.to_uppercase() == "M"); // since haversine works in meters as well
+        if let Some(set) = self.sorted_sets.data.get(key) {
+            for (score, member) in set {
+                let c2 = decode(score.0 as u64);
+                if haversine(&c1, &c2) <= radius {
+                    finds.push(Resp::bulk_string(member));
+                }
+            }
+        }
+        TryExecuteResult::Done(Resp::array(finds))
     }
 
     // Pure, sync
@@ -1200,6 +1225,14 @@ impl Store {
                 member1,
                 member2,
             } => self.command_geodist(&key, &member1, &member2),
+
+            Command::Geosearch {
+                key,
+                longitude,
+                latitude,
+                radius,
+                unit,
+            } => self.command_geosearch(&key, longitude, latitude, radius, &unit),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

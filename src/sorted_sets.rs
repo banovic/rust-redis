@@ -7,7 +7,7 @@ use std::{
 use clap::builder::Str;
 
 #[derive(Debug, Clone, Copy)]
-pub struct SafeFloat(f64);
+pub struct SafeFloat(pub f64);
 
 // Implement PartialEq using total_cmp
 impl PartialEq for SafeFloat {

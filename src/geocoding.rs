@@ -90,7 +90,7 @@ pub fn encode(latitude: f64, longitude: f64) -> u64 {
 /// Mirrors Redis' `geohashGetDistance` (deps/geohash-int/geohash_helper.c):
 /// same Earth radius, and the same haversine formulation using
 /// `2 * R * asin(sqrt(a))` so results match Redis bit-for-bit.
-pub fn haversine(c1: Coordinates, c2: Coordinates) -> f64 {
+pub fn haversine(c1: &Coordinates, c2: &Coordinates) -> f64 {
     // Earth radius in meters, identical to Redis' EARTH_RADIUS_IN_METERS.
     const EARTH_RADIUS_IN_METERS: f64 = 6372797.560856;
 

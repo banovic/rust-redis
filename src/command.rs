@@ -236,6 +236,14 @@ pub enum Command {
         member1: String,
         member2: String,
     },
+    Geosearch {
+        // supports only FROMLONLAT + BYRADUIS right now
+        key: String,
+        longitude: f64,
+        latitude: f64,
+        radius: f64,
+        unit: String,
+    },
 }
 
 impl Command {
@@ -284,6 +292,7 @@ impl Command {
             Command::Geoadd { .. } => "geoadd",
             Command::Geopos { .. } => "geopos",
             Command::Geodist { .. } => "geodist",
+            Command::Geosearch { .. } => "geosearch",
         }
     }
 
@@ -799,6 +808,25 @@ impl Command {
                         key,
                         member1,
                         member2,
+                    })
+                }
+                "GEOSEARCH" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let fromlonlat = els[2].get_str().unwrap().to_string();
+                    assert!(fromlonlat == "FROMLONLAT");
+                    let longitude = els[3].get_str().unwrap().parse::<f64>().unwrap();
+                    let latitude = els[4].get_str().unwrap().parse::<f64>().unwrap();
+                    let byradius = els[5].get_str().unwrap().to_string();
+                    assert!(byradius == "BYRADUIS");
+                    let radius = els[6].get_str().unwrap().parse::<f64>().unwrap();
+                    let unit = els[7].get_str().unwrap().to_string().to_uppercase();
+                    assert!(unit == "M" || unit == "KM" || unit == "FT" || unit == "MI");
+                    Some(Command::Geosearch {
+                        key,
+                        longitude,
+                        latitude,
+                        radius,
+                        unit,
                     })
                 }
                 _ => None,
