@@ -1238,7 +1238,7 @@ impl Store {
                 unit,
             } => self.command_geosearch(&key, longitude, latitude, radius, &unit),
 
-            Command::AclWhoami {} => self.command_acl_whoami(),
+            Command::AclWhoami => self.command_acl_whoami(),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

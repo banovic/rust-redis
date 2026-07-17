@@ -245,7 +245,7 @@ pub enum Command {
         unit: String,
     },
     // Acl
-    AclWhoami {},
+    AclWhoami,
 }
 
 impl Command {
@@ -295,7 +295,7 @@ impl Command {
             Command::Geopos { .. } => "geopos",
             Command::Geodist { .. } => "geodist",
             Command::Geosearch { .. } => "geosearch",
-            Command::AclWhoami {} => "aclwhoami",
+            Command::AclWhoami => "aclwhoami",
         }
     }
 
@@ -832,6 +832,10 @@ impl Command {
                         unit,
                     })
                 }
+                "ACL" => match els[1].get_str().unwrap() {
+                    "WHOAMI" => Some(Command::AclWhoami),
+                    _ => None,
+                },
                 _ => None,
             }
         } else {
