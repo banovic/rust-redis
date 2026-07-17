@@ -817,7 +817,7 @@ impl Command {
                     let longitude = els[3].get_str().unwrap().parse::<f64>().unwrap();
                     let latitude = els[4].get_str().unwrap().parse::<f64>().unwrap();
                     let byradius = els[5].get_str().unwrap().to_string();
-                    assert!(byradius == "BYRADUIS");
+                    assert!(byradius == "BYRADIUS");
                     let radius = els[6].get_str().unwrap().parse::<f64>().unwrap();
                     let unit = els[7].get_str().unwrap().to_string().to_uppercase();
                     assert!(unit == "M" || unit == "KM" || unit == "FT" || unit == "MI");
