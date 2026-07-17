@@ -617,6 +617,20 @@ impl Store {
             TryExecuteResult::Done(Resp::Integer(r as i64))
         }
     }
+
+    fn command_geopos(&mut self, key: &String, member: &String) -> TryExecuteResult {
+        match self.sorted_sets.score(key, member) {
+            Some(score) => {
+                let coord = decode(score as u64);
+                TryExecuteResult::Done(Resp::array(vec![
+                    Resp::bulk_string(&coord.longitude.to_string()),
+                    Resp::bulk_string(&coord.latitude.to_string()),
+                ]))
+            }
+            None => TryExecuteResult::Done(Resp::NullArray),
+        }
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
