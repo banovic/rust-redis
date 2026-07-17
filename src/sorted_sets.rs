@@ -105,7 +105,8 @@ impl SortedSets {
             stop
         };
         //let b = (self.data.len() as i32).min(b);
-
+        println!("start: {}, stop: {}", start, stop);
+        println!("    a: {},    b: {}", a, b);
         if a > b {
             return ms;
         }
