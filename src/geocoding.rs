@@ -97,3 +97,23 @@ pub fn haversine(origin: Coordinates, destination: Coordinates) -> f64 {
     let c = 2.0 * a.sqrt().asin();
     R * c
 }
+pub fn haversine2(c1: Coordinates, c2: Coordinates) -> f64 {
+    let r = 6372797.560856; // earth radius in meters
+
+    let phi1 = c1.latitude.to_radians();
+    let phi2 = c2.latitude.to_radians();
+
+    let delta_phi = (c2.latitude - c1.latitude).to_radians();
+    let delta_lambda = (c2.longitude - c2.longitude).to_radians();
+
+    let a = (delta_phi / 2.0).sin().powi(2)
+        + phi1.cos() * phi2.cos() * (delta_lambda / 2.0).sin().powi(2);
+
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+    r * c // Distance in meters
+}
+// 33.67193741394504
+// 136.16958987072897
+// -54.14102928288558
+// -140.02333084533652
