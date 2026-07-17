@@ -216,6 +216,10 @@ pub enum Command {
         key: String,
         member: String,
     },
+    Zrem {
+        key: String,
+        member: String,
+    },
 }
 
 impl Command {
@@ -260,6 +264,7 @@ impl Command {
             Command::Zrange { .. } => "zrange",
             Command::Zcard { .. } => "zcard",
             Command::Zscore { .. } => "zscore",
+            Command::Zrem { .. } => "zrem",
         }
     }
 
@@ -741,6 +746,11 @@ impl Command {
                     let key = els[1].get_str().unwrap().to_string();
                     let member = els[2].get_str().unwrap().to_string();
                     Some(Command::Zscore { key, member })
+                }
+                "ZREM" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let member = els[2].get_str().unwrap().to_string();
+                    Some(Command::Zrem { key, member })
                 }
                 _ => None,
             }

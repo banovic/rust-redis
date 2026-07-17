@@ -128,4 +128,16 @@ impl SortedSets {
         }
         None
     }
+
+    pub fn rem(&mut self, key: &String, member: &String) -> usize {
+        match self.score(key, member) {
+            Some(score) => {
+                self.data.entry(key.to_string()).and_modify(|set| {
+                    (*set).remove(&(SafeFloat(score), member.to_string()));
+                });
+                1
+            }
+            None => 0,
+        }
+    }
 }

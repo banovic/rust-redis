@@ -588,6 +588,11 @@ impl Store {
         }
     }
 
+    fn command_zrem(&mut self, key: &String, member: &String) -> TryExecuteResult {
+        let r = self.sorted_sets.rem(key, member);
+        TryExecuteResult::Done(Resp::integer(r as i64))
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1116,6 +1121,8 @@ impl Store {
             Command::Zcard { key } => self.command_zcard(&key),
 
             Command::Zscore { key, member } => self.command_zscore(&key, &member),
+
+            Command::Zrem { key, member } => self.command_zrem(&key, &member),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
