@@ -92,30 +92,19 @@ impl SortedSets {
     pub fn range(&self, key: &String, start: i32, stop: i32) -> Vec<String> {
         let mut ms = Vec::new();
 
-        let a = if start < 0 {
-            start + self.data.len() as i32
-        } else {
-            start
-        };
+        let len = self.data.get(key).map(|s| s.len() as i32).unwrap_or(0);
+
+        let a = if start < 0 { start + len } else { start };
         let a = 0.max(a);
 
-        let b = if stop < 0 {
-            stop + self.data.len() as i32
-        } else {
-            stop
-        };
-        let b = (self.data.len() as i32).min(b);
+        let b = if stop < 0 { stop + len } else { stop };
+        let b = (len - 1).min(b);
 
-        println!("start: {}, stop: {}", start, stop);
-        println!("    a: {},    b: {}", a, b);
         if a > b {
             return ms;
         }
 
         if let Some(set) = self.data.get(key) {
-            for (i, p) in set {
-                println!("{:?}: {}", i, p);
-            }
             for (i, (_, m)) in set.iter().enumerate() {
                 if a <= (i as i32) && (i as i32) <= b {
                     ms.push(m.clone());
