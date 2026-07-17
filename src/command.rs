@@ -227,6 +227,10 @@ pub enum Command {
         latitude: f64,
         member: String,
     },
+    Geopos {
+        key: String,
+        member: String,
+    },
 }
 
 impl Command {
@@ -273,6 +277,7 @@ impl Command {
             Command::Zscore { .. } => "zscore",
             Command::Zrem { .. } => "zrem",
             Command::Geoadd { .. } => "geoadd",
+            Command::Geopos { .. } => "geopos",
         }
     }
 
@@ -771,6 +776,11 @@ impl Command {
                         latitude,
                         member,
                     })
+                }
+                "GEOPOS" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let member = els[2].get_str().unwrap().to_string();
+                    Some(Command::Geopos { key, member })
                 }
                 _ => None,
             }

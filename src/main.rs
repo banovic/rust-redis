@@ -1169,6 +1169,8 @@ impl Store {
                 member,
             } => self.command_geoadd(&key, longitude, latitude, &member),
 
+            Command::Geopos { key, member } => self.command_geopos(&key, &member),
+
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
     }
