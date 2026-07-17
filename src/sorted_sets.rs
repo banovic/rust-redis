@@ -111,6 +111,9 @@ impl SortedSets {
         }
 
         if let Some(set) = self.data.get(key) {
+            for (i, p) in set {
+                println!("{:?}: {}", i, p);
+            }
             for (i, (_, m)) in set.iter().enumerate() {
                 if a <= (i as i32) && (i as i32) <= b {
                     ms.push(m.clone());
