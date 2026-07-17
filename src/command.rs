@@ -204,6 +204,11 @@ pub enum Command {
         key: String,
         member: String,
     },
+    Zrange {
+        key: String,
+        start: i32,
+        stop: i32,
+    },
 }
 
 impl Command {
@@ -245,6 +250,7 @@ impl Command {
             Command::Unsubscribe { .. } => "unsubscribe",
             Command::Zadd { .. } => "zadd",
             Command::Zrank { .. } => "zrank",
+            Command::Zrange { .. } => "zrange",
         }
     }
 
@@ -711,6 +717,12 @@ impl Command {
                     let key = els[1].get_str().unwrap().to_string();
                     let member = els[2].get_str().unwrap().to_string();
                     Some(Command::Zrank { key, member })
+                }
+                "ZRANGE" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let start = els[2].get_str().unwrap().parse::<i32>().unwrap();
+                    let stop = els[3].get_str().unwrap().parse::<i32>().unwrap();
+                    Some(Command::Zrange { key, start, stop })
                 }
                 _ => None,
             }

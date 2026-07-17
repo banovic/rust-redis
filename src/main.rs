@@ -567,6 +567,16 @@ impl Store {
         }
     }
 
+    fn command_zrange(&mut self, key: &String, start: i32, stop: i32) -> TryExecuteResult {
+        let r = self.sorted_sets.range(key, start, stop);
+        let els = r
+            .iter()
+            .map(|r| Resp::bulk_string(&r.clone()))
+            .collect::<Vec<_>>();
+
+        TryExecuteResult::Done(Resp::array(els))
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1089,6 +1099,8 @@ impl Store {
             }
 
             Command::Zrank { key, member } => self.command_zrank(&key, &member),
+
+            Command::Zrange { key, start, stop } => self.command_zrange(&key, start, stop),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
