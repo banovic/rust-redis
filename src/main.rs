@@ -618,17 +618,22 @@ impl Store {
         }
     }
 
-    fn command_geopos(&mut self, key: &String, member: &String) -> TryExecuteResult {
-        match self.sorted_sets.score(key, member) {
-            Some(score) => {
-                let coord = decode(score as u64);
-                TryExecuteResult::Done(Resp::array(vec![
-                    Resp::bulk_string(&coord.longitude.to_string()),
-                    Resp::bulk_string(&coord.latitude.to_string()),
-                ]))
-            }
-            None => TryExecuteResult::Done(Resp::NullArray),
+    fn command_geopos(&mut self, key: &String, members: &[String]) -> TryExecuteResult {
+        let mut scores = Vec::new();
+        for member in members {
+            let score = match self.sorted_sets.score(key, member) {
+                Some(score) => {
+                    let coord = decode(score as u64);
+                    Resp::array(vec![
+                        Resp::bulk_string(&coord.longitude.to_string()),
+                        Resp::bulk_string(&coord.latitude.to_string()),
+                    ])
+                }
+                None => Resp::NullArray,
+            };
+            scores.push(score);
         }
+        TryExecuteResult::Done(Resp::array(scores))
     }
 
     // Pure, sync
@@ -1169,7 +1174,7 @@ impl Store {
                 member,
             } => self.command_geoadd(&key, longitude, latitude, &member),
 
-            Command::Geopos { key, member } => self.command_geopos(&key, &member),
+            Command::Geopos { key, members } => self.command_geopos(&key, &members),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

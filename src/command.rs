@@ -229,7 +229,7 @@ pub enum Command {
     },
     Geopos {
         key: String,
-        member: String,
+        members: Vec<String>,
     },
 }
 
@@ -779,8 +779,11 @@ impl Command {
                 }
                 "GEOPOS" => {
                     let key = els[1].get_str().unwrap().to_string();
-                    let member = els[2].get_str().unwrap().to_string();
-                    Some(Command::Geopos { key, member })
+                    let members = els[2..]
+                        .iter()
+                        .map(|e| String::from_utf8(e.get_bytes().unwrap()).unwrap())
+                        .collect::<Vec<_>>();
+                    Some(Command::Geopos { key, members })
                 }
                 _ => None,
             }
