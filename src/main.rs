@@ -685,7 +685,10 @@ impl Store {
     }
 
     fn command_acl_getuser(&self, username: &String) -> TryExecuteResult {
-        let res = Resp::array(vec![Resp::bulk_string("flags"), Resp::array(vec![])]);
+        let res = Resp::array(vec![
+            Resp::bulk_string("flags"),
+            Resp::array(vec![Resp::bulk_string("nopass")]),
+        ]);
         TryExecuteResult::Done(res)
     }
 
