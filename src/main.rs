@@ -581,6 +581,13 @@ impl Store {
         TryExecuteResult::Done(Resp::integer(self.sorted_sets.card(key) as i64))
     }
 
+    fn command_zscore(&mut self, key: &String, member: &String) -> TryExecuteResult {
+        match self.sorted_sets.score(key, member) {
+            Some(score) => TryExecuteResult::Done(Resp::bulk_string(&score.to_string())),
+            None => TryExecuteResult::Done(Resp::NullBulkString),
+        }
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1107,6 +1114,8 @@ impl Store {
             Command::Zrange { key, start, stop } => self.command_zrange(&key, start, stop),
 
             Command::Zcard { key } => self.command_zcard(&key),
+
+            Command::Zscore { key, member } => self.command_zscore(&key, &member),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

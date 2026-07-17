@@ -117,4 +117,15 @@ impl SortedSets {
     pub fn card(&self, key: &String) -> usize {
         self.data.get(key).map_or(0, |set| set.len())
     }
+
+    pub fn score(&self, key: &String, member: &String) -> Option<f64> {
+        if let Some(set) = self.data.get(key) {
+            for (k, m) in set.iter() {
+                if m == member {
+                    return Some(k.0);
+                }
+            }
+        }
+        None
+    }
 }
