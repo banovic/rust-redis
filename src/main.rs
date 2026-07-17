@@ -600,7 +600,18 @@ impl Store {
         latitude: f64,
         member: &String,
     ) -> TryExecuteResult {
-        TryExecuteResult::Done(Resp::Integer(1))
+        if longitude < -180.0
+            || longitude > 180.0
+            || latitude < -85.05112878
+            || latitude > 85.05112878
+        {
+            TryExecuteResult::Done(Resp::simple_error(&format!(
+                "ERR invalid longitude,latitude pair {}, {}",
+                longitude, latitude
+            )))
+        } else {
+            TryExecuteResult::Done(Resp::Integer(1))
+        }
     }
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
