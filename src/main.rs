@@ -593,6 +593,15 @@ impl Store {
         TryExecuteResult::Done(Resp::integer(r as i64))
     }
 
+    fn command_geoadd(
+        &mut self,
+        key: &String,
+        longitude: f64,
+        latitude: f64,
+        member: &String,
+    ) -> TryExecuteResult {
+        TryExecuteResult::Done(Resp::Integer(1))
+    }
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1123,6 +1132,13 @@ impl Store {
             Command::Zscore { key, member } => self.command_zscore(&key, &member),
 
             Command::Zrem { key, member } => self.command_zrem(&key, &member),
+
+            Command::Geoadd {
+                key,
+                longitude,
+                latitude,
+                member,
+            } => self.command_geoadd(&key, longitude, latitude, &member),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

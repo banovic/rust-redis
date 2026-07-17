@@ -220,6 +220,13 @@ pub enum Command {
         key: String,
         member: String,
     },
+    // Geo
+    Geoadd {
+        key: String,
+        longitude: f64,
+        latitude: f64,
+        member: String,
+    },
 }
 
 impl Command {
@@ -265,6 +272,7 @@ impl Command {
             Command::Zcard { .. } => "zcard",
             Command::Zscore { .. } => "zscore",
             Command::Zrem { .. } => "zrem",
+            Command::Geoadd { .. } => "geoadd",
         }
     }
 
@@ -751,6 +759,18 @@ impl Command {
                     let key = els[1].get_str().unwrap().to_string();
                     let member = els[2].get_str().unwrap().to_string();
                     Some(Command::Zrem { key, member })
+                }
+                "GEOADD" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let longitude = els[2].get_str().unwrap().parse::<f64>().unwrap();
+                    let latitude = els[3].get_str().unwrap().parse::<f64>().unwrap();
+                    let member = els[4].get_str().unwrap().to_string();
+                    Some(Command::Geoadd {
+                        key,
+                        longitude,
+                        latitude,
+                        member,
+                    })
                 }
                 _ => None,
             }
