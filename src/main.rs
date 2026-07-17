@@ -559,6 +559,14 @@ impl Store {
         TryExecuteResult::Done(Resp::Integer(r as i64))
     }
 
+    fn command_zrank(&mut self, key: &String, member: &String) -> TryExecuteResult {
+        let r = self.sorted_sets.rank(key, member);
+        match r {
+            Some(rank) => TryExecuteResult::Done(Resp::Integer(rank as i64)),
+            None => TryExecuteResult::Done(Resp::NullBulkString),
+        }
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1079,6 +1087,8 @@ impl Store {
             Command::Zadd { key, score, member } => {
                 self.command_zadd(client_id, &key, score, &member)
             }
+
+            Command::Zrank { key, member } => self.command_zrank(&key, &member),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

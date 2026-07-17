@@ -200,6 +200,10 @@ pub enum Command {
         score: f64,
         member: String,
     },
+    Zrank {
+        key: String,
+        member: String,
+    },
 }
 
 impl Command {
@@ -240,6 +244,7 @@ impl Command {
             Command::Publish { .. } => "publish",
             Command::Unsubscribe { .. } => "unsubscribe",
             Command::Zadd { .. } => "zadd",
+            Command::Zrank { .. } => "zrank",
         }
     }
 
@@ -701,6 +706,11 @@ impl Command {
                     let score = els[2].get_str().unwrap().parse::<f64>().unwrap();
                     let member = els[3].get_str().unwrap().to_string();
                     Some(Command::Zadd { key, score, member })
+                }
+                "ZRANK" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let member = els[2].get_str().unwrap().to_string();
+                    Some(Command::Zrank { key, member })
                 }
                 _ => None,
             }

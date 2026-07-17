@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +32,7 @@ impl Ord for SafeFloat {
 
 #[derive(Debug)]
 pub struct SortedSets {
-    pub data: HashMap<String, BTreeMap<SafeFloat, String>>,
+    pub data: HashMap<String, BTreeMap<SafeFloat, BTreeSet<String>>>,
 }
 
 impl SortedSets {
@@ -49,26 +49,54 @@ impl SortedSets {
             self.data.insert(key.clone(), BTreeMap::new());
         }
 
-        for (k, v) in self.data.get_mut(key).unwrap() {
+        let map = self.data.get_mut(key).unwrap();
+
+        for (sk, set) in map {
             // Update key for existing member
-            if v == member {
-                prev_score_key = Some(*k);
+            if set.contains(member) {
+                prev_score_key = Some(*sk);
                 break;
             }
         }
 
+        let mut map = self.data.get_mut(key).unwrap();
+
         if let Some(prev_score_key) = prev_score_key {
-            self.data.get_mut(key).unwrap().remove(&prev_score_key);
+            let mut set = map.get_mut(&prev_score_key).unwrap();
+            set.remove(member);
+            if set.is_empty() {
+                map.remove(&prev_score_key);
+            }
         }
 
-        self.data
-            .get_mut(key)
-            .unwrap()
-            .insert(SafeFloat(score), member.clone());
+        let nk = SafeFloat(score);
+        map.entry(nk)
+            .and_modify(|set| {
+                (*set).insert(member.clone());
+            })
+            .or_insert(BTreeSet::from([member.clone()]));
 
         match prev_score_key {
             Some(_) => 0, // update, no inserts
             None => 1,    // pure insert
         }
+    }
+
+    pub fn rank(&self, key: &String, member: &String) -> Option<u64> {
+        let mut r = 0_u64;
+        if let Some(map) = self.data.get(key) {
+            for (k, set) in map.iter() {
+                if set.contains(member) {
+                    for m in set {
+                        if m == member {
+                            return Some(r);
+                        }
+                        r += 1;
+                    }
+                }
+                r += 1;
+            }
+        }
+        None
     }
 }
