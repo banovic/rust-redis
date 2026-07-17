@@ -680,6 +680,10 @@ impl Store {
         TryExecuteResult::Done(Resp::array(finds))
     }
 
+    fn command_acl_whoami(&self) -> TryExecuteResult {
+        TryExecuteResult::Done(Resp::bulk_string("default"))
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1233,6 +1237,8 @@ impl Store {
                 radius,
                 unit,
             } => self.command_geosearch(&key, longitude, latitude, radius, &unit),
+
+            Command::AclWhoami {} => self.command_acl_whoami(),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

@@ -244,6 +244,8 @@ pub enum Command {
         radius: f64,
         unit: String,
     },
+    // Acl
+    AclWhoami {},
 }
 
 impl Command {
@@ -293,6 +295,7 @@ impl Command {
             Command::Geopos { .. } => "geopos",
             Command::Geodist { .. } => "geodist",
             Command::Geosearch { .. } => "geosearch",
+            Command::AclWhoami {} => "aclwhoami",
         }
     }
 
