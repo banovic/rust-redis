@@ -688,6 +688,8 @@ impl Store {
         let res = Resp::array(vec![
             Resp::bulk_string("flags"),
             Resp::array(vec![Resp::bulk_string("nopass")]),
+            Resp::bulk_string("passwords"),
+            Resp::array(vec![]),
         ]);
         TryExecuteResult::Done(res)
     }
