@@ -104,7 +104,7 @@ impl SortedSets {
         } else {
             stop
         };
-        let b = (self.data.len() as i32).max(b);
+        let b = (self.data.len() as i32).min(b);
 
         if a > b {
             return ms;
