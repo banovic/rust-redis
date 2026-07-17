@@ -52,6 +52,8 @@ mod client;
 use client::ClientRunMode;
 mod sorted_sets;
 use sorted_sets::{SafeFloat, SortedSets};
+mod geocoding;
+use geocoding::*;
 
 use crate::PrimitiveValue::List;
 use crate::client::ClientDispatch;
@@ -610,7 +612,7 @@ impl Store {
                 longitude, latitude
             )))
         } else {
-            let score = 0.0;
+            let score = f64::from_bits(encode(latitude, longitude));
             let r = self.sorted_sets.insert(key, score, member);
             TryExecuteResult::Done(Resp::Integer(r as i64))
         }
