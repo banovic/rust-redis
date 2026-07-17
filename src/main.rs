@@ -612,7 +612,7 @@ impl Store {
                 longitude, latitude
             )))
         } else {
-            let score = f64::from_bits(encode(latitude, longitude));
+            let score = encode(latitude, longitude) as f64;
             let r = self.sorted_sets.insert(key, score, member);
             TryExecuteResult::Done(Resp::Integer(r as i64))
         }
