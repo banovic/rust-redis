@@ -42,12 +42,33 @@ impl SortedSets {
         }
     }
 
-    pub fn insert(&mut self, key: &String, score: f64, member: &String) {
+    pub fn insert(&mut self, key: &String, score: f64, member: &String) -> usize {
+        let mut prev_score_key: Option<SafeFloat> = None;
+
+        if !self.data.contains_key(key) {
+            self.data.insert(key.clone(), BTreeMap::new());
+        }
+
+        for (k, v) in self.data.get_mut(key).unwrap() {
+            // Update key for existing member
+            if v == member {
+                prev_score_key = Some(*k);
+                break;
+            }
+        }
+
+        if let Some(prev_score_key) = prev_score_key {
+            self.data.get_mut(key).unwrap().remove(&prev_score_key);
+        }
+
         self.data
-            .entry(key.clone())
-            .and_modify(|s| {
-                (*s).insert(SafeFloat(score), member.clone());
-            })
-            .or_insert(BTreeMap::from([(SafeFloat(score), member.clone())]));
+            .get_mut(key)
+            .unwrap()
+            .insert(SafeFloat(score), member.clone());
+
+        match prev_score_key {
+            Some(_) => 0, // update, no inserts
+            None => 1,    // pure insert
+        }
     }
 }
