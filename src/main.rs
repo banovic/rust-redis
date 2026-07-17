@@ -636,6 +636,25 @@ impl Store {
         TryExecuteResult::Done(Resp::array(scores))
     }
 
+    fn command_geodist(
+        &mut self,
+        key: &String,
+        member1: &String,
+        member2: &String,
+    ) -> TryExecuteResult {
+        if let (Some(score1), Some(score2)) = (
+            self.sorted_sets.score(key, member1),
+            self.sorted_sets.score(key, member2),
+        ) {
+            let coord1 = decode(score1 as u64);
+            let coord2 = decode(score2 as u64);
+            let dist = haversine(coord1, coord2);
+            TryExecuteResult::Done(Resp::bulk_string(&dist.to_string()))
+        } else {
+            TryExecuteResult::Done(Resp::NullBulkString)
+        }
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1175,6 +1194,12 @@ impl Store {
             } => self.command_geoadd(&key, longitude, latitude, &member),
 
             Command::Geopos { key, members } => self.command_geopos(&key, &members),
+
+            Command::Geodist {
+                key,
+                member1,
+                member2,
+            } => self.command_geodist(&key, &member1, &member2),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

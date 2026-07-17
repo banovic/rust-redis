@@ -231,6 +231,11 @@ pub enum Command {
         key: String,
         members: Vec<String>,
     },
+    Geodist {
+        key: String,
+        member1: String,
+        member2: String,
+    },
 }
 
 impl Command {
@@ -278,6 +283,7 @@ impl Command {
             Command::Zrem { .. } => "zrem",
             Command::Geoadd { .. } => "geoadd",
             Command::Geopos { .. } => "geopos",
+            Command::Geodist { .. } => "geodist",
         }
     }
 
@@ -784,6 +790,16 @@ impl Command {
                         .map(|e| String::from_utf8(e.get_bytes().unwrap()).unwrap())
                         .collect::<Vec<_>>();
                     Some(Command::Geopos { key, members })
+                }
+                "GEODIST" => {
+                    let key = els[1].get_str().unwrap().to_string();
+                    let member1 = els[2].get_str().unwrap().to_string();
+                    let member2 = els[3].get_str().unwrap().to_string();
+                    Some(Command::Geodist {
+                        key,
+                        member1,
+                        member2,
+                    })
                 }
                 _ => None,
             }
