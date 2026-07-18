@@ -29,7 +29,14 @@ pub enum ClientRunMode {
 
 impl ClientRunMode {
     // Client router and state switcher
-    pub fn run(self, command: Command) -> (ClientRunMode, ClientDispatch) {
+    pub fn run(self, need_auth: bool, command: Command) -> (ClientRunMode, ClientDispatch) {
+        if need_auth {
+            return (
+                Normal,
+                Reply(Resp::simple_error("NOAUTH Authentication required.")),
+            );
+        }
+
         match (self, command) {
             // Normal commands
             (Normal, ReplconfListeningPort { .. }) => (Normal, Reply(Resp::simple_string("OK"))),

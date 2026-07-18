@@ -1345,6 +1345,7 @@ enum Envelope {
     RegisterClient {
         client_id: ClientId,
         tx: mpsc::Sender<StorePush>,
+        reply_channel: oneshot::Sender<bool>,
     },
     UnregisterClient {
         client_id: ClientId,
@@ -1546,8 +1547,18 @@ async fn run_store(
                     }
                 };
             }
-            Envelope::RegisterClient { client_id, tx } => {
+            Envelope::RegisterClient {
+                client_id,
+                tx,
+                reply_channel,
+            } => {
                 store.clients.insert(client_id, (false, tx));
+                let need_auth = if let Some(passwords) = store.users.get("default") {
+                    passwords.is_empty()
+                } else {
+                    false
+                };
+                reply_channel.send(need_auth);
             }
             Envelope::UnregisterClient { client_id } => {
                 store.clients.remove(&client_id);
@@ -1569,9 +1580,15 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
     let (tx, mut rx) = mpsc::channel::<StorePush>(1024);
 
     // Register this client for receiveing messages from server/store
+    let (need_auth_tx, need_auth_rx) = oneshot::channel::<bool>();
     let _ = store_tx
-        .send(Envelope::RegisterClient { client_id, tx })
+        .send(Envelope::RegisterClient {
+            client_id,
+            tx,
+            reply_channel: need_auth_tx,
+        })
         .await;
+    let need_auth = need_auth_rx.await.unwrap();
 
     // Initial state / mode for client:
     let mut mode = ClientRunMode::Normal;
@@ -1589,7 +1606,7 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
 
                         for input in inputs {
                             let command = Command::from_resp(&input).unwrap();
-                            let (next_mode, dispatch ) = mode.run(command);
+                            let (next_mode, dispatch ) = mode.run(need_auth, command);
                             mode = next_mode;
 
                             match dispatch {
