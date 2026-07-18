@@ -2,6 +2,7 @@
 //use clap::Parser;
 use core::{num, str};
 use futures::channel::oneshot;
+use sha2::{Digest, Sha256};
 //use futures::future::select_all;
 use std::collections::HashSet;
 use std::env;
@@ -132,6 +133,7 @@ struct Store {
     // dbfilename: Option<String>,
     pubsub: PubSub,
     sorted_sets: SortedSets,
+    users: HashMap<String, HashSet<String>>,
 }
 
 impl Store {
@@ -165,6 +167,7 @@ impl Store {
                 config,
                 pubsub: PubSub::new(),
                 sorted_sets: SortedSets::new(),
+                users: HashMap::from([("default".to_string(), HashSet::new())]),
             },
         }
     }
@@ -217,6 +220,7 @@ impl Store {
             config,
             pubsub: PubSub::new(),
             sorted_sets: SortedSets::new(),
+            users: HashMap::from([("default".to_string(), HashSet::new())]),
         }
     }
 
@@ -685,13 +689,31 @@ impl Store {
     }
 
     fn command_acl_getuser(&self, username: &String) -> TryExecuteResult {
+        let passwords_resp = if let Some(passwords) = self.users.get(username) {
+            passwords.iter().map(|p| Resp::bulk_string(p)).collect()
+        } else {
+            vec![]
+        };
+
         let res = Resp::array(vec![
             Resp::bulk_string("flags"),
             Resp::array(vec![Resp::bulk_string("nopass")]),
             Resp::bulk_string("passwords"),
-            Resp::array(vec![]),
+            Resp::array(passwords_resp),
         ]);
         TryExecuteResult::Done(res)
+    }
+
+    fn command_acl_setuser(&mut self, username: &String, password: &String) -> TryExecuteResult {
+        let hash = Sha256::digest(password.as_bytes());
+        let hash_string: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        self.users
+            .entry(username.clone())
+            .and_modify(|set| {
+                (*set).insert(hash_string.clone());
+            })
+            .or_insert(HashSet::from([hash_string]));
+        TryExecuteResult::Done(Resp::simple_string("OK"))
     }
 
     // Pure, sync
@@ -1251,6 +1273,10 @@ impl Store {
             Command::AclWhoami => self.command_acl_whoami(),
 
             Command::AclGetuser { username } => self.command_acl_getuser(&username),
+
+            Command::AclSetuser { username, password } => {
+                self.command_acl_setuser(&username, &password)
+            }
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }

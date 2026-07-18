@@ -249,6 +249,10 @@ pub enum Command {
     AclGetuser {
         username: String,
     },
+    AclSetuser {
+        username: String,
+        password: String,
+    },
 }
 
 impl Command {
@@ -300,6 +304,7 @@ impl Command {
             Command::Geosearch { .. } => "geosearch",
             Command::AclWhoami => "aclwhoami",
             Command::AclGetuser { .. } => "aclgetuser",
+            Command::AclSetuser { .. } => "aclsetuser",
         }
     }
 
@@ -841,6 +846,13 @@ impl Command {
                     "GETUSER" => {
                         let username = els[2].get_str().unwrap().to_string();
                         Some(Command::AclGetuser { username })
+                    }
+                    "SETUSER" => {
+                        let username = els[2].get_str().unwrap().to_string();
+                        let mut password = els[3].get_str().unwrap().to_string();
+                        assert!(password.starts_with(">"));
+                        password.remove(0);
+                        Some(Command::AclSetuser { username, password })
                     }
                     _ => None,
                 },

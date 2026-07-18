@@ -11,3 +11,4 @@ thiserror = "1.0.32"                                # error handling
 tokio = { version = "1.23.0", features = ["full"] } # async networking
 futures = "0.3"
 clap = { version = "4.6.1", features = ["derive"] }
+sha2 = "0.11.0"
