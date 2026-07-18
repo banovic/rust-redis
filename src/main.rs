@@ -695,9 +695,14 @@ impl Store {
             vec![]
         };
 
+        let flags_resp = if passwords_resp.is_empty() {
+            vec![Resp::bulk_string("nopass")]
+        } else {
+            vec![]
+        };
         let res = Resp::array(vec![
             Resp::bulk_string("flags"),
-            Resp::array(vec![Resp::bulk_string("nopass")]),
+            Resp::array(flags_resp),
             Resp::bulk_string("passwords"),
             Resp::array(passwords_resp),
         ]);
