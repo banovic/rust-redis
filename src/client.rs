@@ -1,10 +1,10 @@
 use crate::{
     client::{
-        ClientDispatch::{Execute, ExecuteNoReply, Reply, StartReplica},
+        ClientDispatch::{Execute, ExecuteNoReply, MustAuth, Reply, StartReplica},
         ClientRunMode::{Normal, Subscription, Transaction},
     },
     command::Command::{
-        self, Discard, Echo, Exec, Multi, Ping, Psync, Publish, ReplconfAck, ReplconfCapa,
+        self, Auth, Discard, Echo, Exec, Multi, Ping, Psync, Publish, ReplconfAck, ReplconfCapa,
         ReplconfListeningPort, Subscribe, Unsubscribe, Watch,
     },
     resp::Resp,
@@ -19,6 +19,8 @@ pub enum ClientDispatch {
     Reply(Resp),
     // Start this client as replica
     StartReplica(Command),
+    // Auth
+    MustAuth(String, String),
 }
 
 pub enum ClientRunMode {
@@ -30,11 +32,17 @@ pub enum ClientRunMode {
 impl ClientRunMode {
     // Client router and state switcher
     pub fn run(self, need_auth: bool, command: Command) -> (ClientRunMode, ClientDispatch) {
-        if need_auth {
-            return (
-                Normal,
-                Reply(Resp::simple_error("NOAUTH Authentication required.")),
-            );
+        if let Auth { username, password } = command.clone() {
+            if need_auth {
+                return (Normal, MustAuth(username, password));
+            }
+        } else {
+            if need_auth {
+                return (
+                    Normal,
+                    Reply(Resp::simple_error("NOAUTH Authentication required.")),
+                );
+            }
         }
 
         match (self, command) {

@@ -1588,7 +1588,7 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
             reply_channel: need_auth_tx,
         })
         .await;
-    let need_auth = need_auth_rx.await.unwrap();
+    let mut need_auth = need_auth_rx.await.unwrap();
 
     // Initial state / mode for client:
     let mut mode = ClientRunMode::Normal;
@@ -1635,6 +1635,19 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
                                     let rdb = reply_rx.await.unwrap();
                                     let _ = write_resp(&mut stream, &Resp::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".as_bytes().to_vec())).await;
                                     let _ = write_resp(&mut stream, &rdb).await;
+                                },
+                                ClientDispatch::MustAuth(username, password) => {
+                                    let (reply_tx, reply_rx) = oneshot::channel::<Resp>();
+                                    let envelope = Envelope::WithReply { client_id, command: Command::Auth { username, password}, reply_channel: reply_tx };
+                                    let _ = store_tx.send(envelope).await;
+                                    let resp = match reply_rx.await {
+                                        Ok(resp) => resp,
+                                        Err(e) => panic!("Something wrong with processing command: {:?}", e),
+                                    };
+                                    if let Resp::SimpleString(s) = &resp {
+                                        need_auth = false;
+                                    }
+                                    let _ = write_resp(&mut stream, &resp).await;
                                 }
                             }
                         }
