@@ -253,6 +253,10 @@ pub enum Command {
         username: String,
         password: String,
     },
+    Auth {
+        username: String,
+        password: String,
+    },
 }
 
 impl Command {
@@ -305,6 +309,7 @@ impl Command {
             Command::AclWhoami => "aclwhoami",
             Command::AclGetuser { .. } => "aclgetuser",
             Command::AclSetuser { .. } => "aclsetuser",
+            Command::Auth { .. } => "auth",
         }
     }
 
@@ -856,6 +861,11 @@ impl Command {
                     }
                     _ => None,
                 },
+                "AUTH" => {
+                    let username = els[1].get_str().unwrap().to_string();
+                    let password = els[2].get_str().unwrap().to_string();
+                    Some(Command::Auth { username, password })
+                }
                 _ => None,
             }
         } else {

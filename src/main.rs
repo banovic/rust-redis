@@ -721,6 +721,19 @@ impl Store {
         TryExecuteResult::Done(Resp::simple_string("OK"))
     }
 
+    fn command_auth(&mut self, username: &String, password: &String) -> TryExecuteResult {
+        if let Some(passwords) = self.users.get(username) {
+            let hash = Sha256::digest(password.as_bytes());
+            let hash_string: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+            if passwords.contains(&hash_string) {
+                return TryExecuteResult::Done(Resp::simple_string("OK"));
+            }
+        }
+        TryExecuteResult::Done(Resp::simple_error(
+            "WRONGPASS invalid username-password pair or user is disabled.",
+        ))
+    }
+
     // Pure, sync
     fn try_execute(&mut self, client_id: usize, cmd: Command) -> TryExecuteResult {
         for key in cmd.modified_keys() {
@@ -1282,6 +1295,8 @@ impl Store {
             Command::AclSetuser { username, password } => {
                 self.command_acl_setuser(&username, &password)
             }
+
+            Command::Auth { username, password } => self.command_auth(&username, &password),
 
             _ => TryExecuteResult::Done(Resp::NullBulkString),
         }
