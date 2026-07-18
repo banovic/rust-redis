@@ -1554,11 +1554,11 @@ async fn run_store(
             } => {
                 store.clients.insert(client_id, (false, tx));
                 let need_auth = if let Some(passwords) = store.users.get("default") {
-                    passwords.is_empty()
+                    !passwords.is_empty()
                 } else {
-                    false
+                    true
                 };
-                reply_channel.send(need_auth);
+                let _ = reply_channel.send(need_auth);
             }
             Envelope::UnregisterClient { client_id } => {
                 store.clients.remove(&client_id);
