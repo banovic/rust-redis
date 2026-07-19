@@ -1575,7 +1575,6 @@ async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     match stream.read(&mut buffer).await {
         Ok(0) => {
             // Client disconected
-            println!("[read] 0 bytes read");
             None
         }
         Ok(n) => {
@@ -1686,7 +1685,7 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
         let read_inputs = read_resp_from_stream(&mut stream).await;
         match read_inputs {
             None => {
-                println!("Master disconnected");
+                // Master disconnected
                 break;
             }
             Some(inputs) => {

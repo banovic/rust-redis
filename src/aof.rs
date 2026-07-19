@@ -69,7 +69,7 @@ impl Aof {
     pub async fn create_dir(dirname: &str) {
         let path = Path::new(&dirname);
         if Path::is_dir(path) {
-            println!("[aof] dir {:?} already exist", dirname);
+            //println!("[aof] dir {:?} already exist", dirname);
         } else {
             let _ = fs::create_dir(path)
                 .await
@@ -92,14 +92,11 @@ impl Aof {
     }
 
     pub async fn get_aof_filename(mf_filename: &str) -> Option<String> {
-        println!("[aof] MF: trying filename: {}", mf_filename);
         let mut mf_file = File::open(&Path::new(&mf_filename)).await.unwrap();
         let mut buffer = String::new();
         let _ = mf_file.read_to_string(&mut buffer).await.unwrap();
-        println!("[aof] MF: file: {}", buffer);
         for l in buffer.lines() {
             let mut parts = l.split(' ').collect::<Vec<_>>();
-            println!("[aof] MF: parts: {:?}", parts);
             match (parts.get(1), parts.get(5)) {
                 (Some(aof_filename), Some(t)) if *t == "i" => {
                     return Some(aof_filename.to_string());
