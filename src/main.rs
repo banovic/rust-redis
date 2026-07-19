@@ -1333,7 +1333,7 @@ async fn run_store(
                         });
                     }
                     TryExecuteResult::BlockingBlpop(waiter_id, keys) => {
-                        println!("BLPOP: Timeout: {:?}", timeout);
+                        //println!("BLPOP: Timeout: {:?}", timeout);
                         store
                             .list_blpop_waiters
                             .insert(waiter_id, (reply_channel, keys));
@@ -1427,7 +1427,7 @@ async fn run_store(
 }
 
 async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::Sender<Envelope>) {
-    println!("Connected client {}", client_id);
+    //println!("Connected client {}", client_id);
     let mut buffer = [0u8; 1024];
 
     // Channel to this client, so master can send commands for replication
@@ -1516,7 +1516,7 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
             store_push = rx.recv() => {
                 // Command received from master, encode it and send it to client / replica
                 // (this is all happening on master, this is process inside master / server)
-                println!("(master process, client connection handler) received store push message: {:?}", store_push);
+                //println!("(master process, client connection handler) received store push message: {:?}", store_push);
                 match store_push.unwrap() {
                     StorePush::Replicate(command) => {
                         write_command_to_stream(&mut stream, &command).await;
@@ -1534,32 +1534,7 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
         .send(Envelope::UnregisterClient { client_id })
         .await;
 
-    println!("Client {} disconnected", client_id);
-}
-
-async fn execute_command(
-    store_ch: &mpsc::Sender<Envelope>,
-    client_id: usize,
-    command: Command,
-) -> Resp {
-    // Create command
-    let (reply_ch_sender, reply_ch_receiver) = oneshot::channel::<Resp>();
-    // Pass to store to handle
-    let envelope = Envelope::WithReply {
-        client_id,
-        command,
-        reply_channel: reply_ch_sender,
-    };
-
-    let _ = store_ch.send(envelope).await; // this is store process
-
-    // store process must send reply in all cases. how to ensure / enforce this?
-    let reply = match reply_ch_receiver.await {
-        Ok(r) => r,
-        Err(e) => panic!("Something wrong with processing command: {:?}", e),
-    };
-
-    reply
+    //println!("Client {} disconnected", client_id);
 }
 
 // function that processes messages replica receovis from master
@@ -1568,7 +1543,7 @@ async fn process_replica_message(
     input: Resp,
     ack_bytes: usize,
 ) -> Option<Resp> {
-    println!("Replica processing input: {:?}", input);
+    //println!("Replica processing input: {:?}", input);
     if let Some(command) = Command::from_resp(&input) {
         // println!(
         //     "[process_replica_message] input: {:?}, command: {:?}",
@@ -1658,11 +1633,12 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     // FULLRESYNC response tO PSYNC and RDB file, 3rd message can be also in these inputs
     let mut queue = VecDeque::new();
     loop {
-        let new_resp = read_resp_from_stream(stream).await.unwrap();
-        queue.extend(new_resp);
-        if queue.len() >= 2 {
-            // This means that FULLRESYNC and RDB file were received as 2 first messages
-            break;
+        if let Some(new_resp) = read_resp_from_stream(stream).await {
+            queue.extend(new_resp);
+            if queue.len() >= 2 {
+                // This means that FULLRESYNC and RDB file were received as 2 first messages
+                break;
+            }
         }
         // TODO timeout case
     }
@@ -1798,7 +1774,7 @@ impl Config {
 #[tokio::main]
 async fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+    //println!("Logs from your program will appear here!");
 
     let client_counter = AtomicUsize::new(1);
 
