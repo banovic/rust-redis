@@ -1572,20 +1572,22 @@ async fn process_replica_message(
 
 async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     let mut buffer = [0; 1024];
-    let n = stream.read(&mut buffer).await.unwrap();
-    let read_inputs = if n == 0 {
-        // Client disconected
-        println!("[read] None");
-        None
-    } else {
-        let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
-        // for resp in &inputs {
-        //     println!("[read][{}] {:?}", resp.len(), resp);
-        // }
-        Some(inputs)
-    };
-
-    read_inputs
+    match stream.read(&mut buffer).await {
+        Ok(0) => {
+            // Client disconected
+            println!("[read] 0 bytes read");
+            None
+        }
+        Ok(n) => {
+            let (inputs, _) = parse_resp(&buffer[..n]).unwrap();
+            Some(inputs)
+        }
+        Err(e) => {
+            // Erro while reading:
+            println!("[read] Error: {:?}", e);
+            None
+        }
+    }
 }
 
 async fn write_resp_to_stream(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
