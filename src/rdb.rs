@@ -118,18 +118,18 @@ fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<(Key, RdbString)>> {
     move |input: ParserInput<'a>| {
         // Database sub-section, starts with FE
         let (db_section, rest) = byte(0xFE).parse(input)?;
-        println!("[RDB] DB Section       : {:?}", db_section);
+        //println!("[RDB] DB Section       : {:?}", db_section);
         let (db_index, rest) = le_integer().parse(rest)?;
-        println!("[RDB] DB Index         : {:?}", db_index);
+        //println!("[RDB] DB Index         : {:?}", db_index);
         let (db_hash_section, rest) = byte(0xFB).parse(rest)?;
-        println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
+        //println!("[RDB] DB Hash Section  : {:?}", db_hash_section);
         let (db_kvs_size, rest) = le_integer().parse(rest)?;
-        println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
+        //println!("[RDB] DB KVS Size      : {:?}", db_kvs_size);
         let (db_expires_size, rest) = le_integer().parse(rest)?;
-        println!("[RDB] DB expires size  : {:?}", db_expires_size);
+        //println!("[RDB] DB expires size  : {:?}", db_expires_size);
         //let (db_kvs, rest) = many0(and!(le_string(), le_string())).parse(rest).unwrap();
         let (db_entries, rest) = many0(parse_rdb_entry()).parse(rest)?;
-        println!("[RDB] DB entries       : {:?}", db_entries);
+        //println!("[RDB] DB entries       : {:?}", db_entries);
         Ok((db_entries, rest))
     }
 }
@@ -137,9 +137,9 @@ fn parse_db_subsection<'a>() -> impl Parser<'a, Vec<(Key, RdbString)>> {
 fn parse_metadata_subsection<'a>() -> impl Parser<'a, (String, String)> {
     move |input: ParserInput<'a>| {
         let (metadata_section, rest) = byte(0xFA).parse(input)?;
-        println!("[RDB] MD Section       : {}", metadata_section);
+        //println!("[RDB] MD Section       : {}", metadata_section);
         let (metadata_kv, rest) = and!(le_string(), le_string()).parse(rest)?;
-        println!("[RDB] MD KV            : {:?}", metadata_kv);
+        //println!("[RDB] MD KV            : {:?}", metadata_kv);
         Ok((metadata_kv, rest))
     }
 }
@@ -242,25 +242,25 @@ impl Rdb {
     }
 
     pub fn deserialize(input: &[u8]) -> Result<Self, Error> {
-        println!("[RDB] : {:?}", input);
+        //println!("[RDB] : {:?}", input);
         // Read header: REDIS + 4 bytes version
         let ((redis, version), input) = and!(tag_str("REDIS"), take(4)).parse(input).unwrap();
-        println!("[RDB] REDIS            : {}", redis);
-        println!("[RDB] VERSION          : {:?}", version);
+        //println!("[RDB] REDIS            : {}", redis);
+        //println!("[RDB] VERSION          : {:?}", version);
 
         let (metadata_sub_sections, input) =
             many0(parse_metadata_subsection()).parse(input).unwrap();
-        println!("[RDB] MD sub sections  : {:?}", metadata_sub_sections);
+        //println!("[RDB] MD sub sections  : {:?}", metadata_sub_sections);
         let metadata: HashMap<String, String> = metadata_sub_sections.into_iter().collect();
 
         let (db_sub_sections, input) = many0(parse_db_subsection()).parse(input).unwrap();
-        println!("[RDB] Db sub sections  : {:?}", db_sub_sections);
+        //println!("[RDB] Db sub sections  : {:?}", db_sub_sections);
 
         // End of file section
         let (eof_section, input) = byte(0xFF).parse(input).unwrap();
-        println!("[RDB] End Section      : {:?}", eof_section);
+        //println!("[RDB] End Section      : {:?}", eof_section);
         let (crc64, input) = take(8).parse(input).unwrap();
-        println!("[RDB] CRC64            : {:?}", crc64);
+        //println!("[RDB] CRC64            : {:?}", crc64);
 
         let mut data_parts = Vec::new();
         for db in db_sub_sections {

@@ -764,14 +764,13 @@ impl Store {
             }
 
             Command::InternalExecuteTx { commands } => {
-                println!("tx: store1: {:?}", self);
                 // Optimistic locking check
                 let mut lock_failed = false;
                 for (key, clients) in &self.watched_keys {
-                    println!(
-                        "tx: client_id {}, checking: key {:?} - {:?}",
-                        client_id, &key, clients
-                    );
+                    // println!(
+                    //     "tx: client_id {}, checking: key {:?} - {:?}",
+                    //     client_id, &key, clients
+                    // );
                     if clients.contains(&client_id) && clients.len() > 1 {
                         lock_failed = true;
                     }
@@ -801,7 +800,6 @@ impl Store {
                     clients.remove(&client_id);
                 }
                 self.watched_keys.retain(|_, clients| !clients.is_empty());
-                println!("tx: store2: {:?}", self);
                 TryExecuteResult::Done(Resp::Array(replies))
             }
             Command::Discard => {
@@ -1311,10 +1309,10 @@ async fn run_store(
                         if let Some(replication_command) = replication_command {
                             for (client_id, (is_replica, tx)) in &store.clients {
                                 if *is_replica {
-                                    println!(
-                                        "[client_id = {}] Replicating command: {:?}",
-                                        client_id, replication_command
-                                    );
+                                    // println!(
+                                    //     "[client_id = {}] Replicating command: {:?}",
+                                    //     client_id, replication_command
+                                    // );
                                     let _ = tx
                                         .send(StorePush::Replicate(replication_command.clone()))
                                         .await;
@@ -1430,11 +1428,7 @@ async fn run_store(
 
 async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::Sender<Envelope>) {
     println!("Connected client {}", client_id);
-    let mut queue: Option<VecDeque<Command>> = None; //VecDeque::new();
     let mut buffer = [0u8; 1024];
-
-    // id the client in subscribe mode?
-    let mut is_subscribe_mode = false;
 
     // Channel to this client, so master can send commands for replication
     let (tx, mut rx) = mpsc::channel::<StorePush>(1024);
@@ -1692,19 +1686,11 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
     let (is_handshake_success, mut inputs_queue) =
         replica_server_handshake(&mut stream, port).await;
 
-    println!("Handshake phase 2 complete, starting listening and metering on this connection");
-    println!(
-        "Handshake phase 2 finish, success: {:?}",
-        is_handshake_success
-    );
-    println!("Handshake phase 2 finish, input queue: {:?}", inputs_queue);
-
     // Start counting ACK bytes here:
     let mut ack_bytes = 0;
 
     // Optional other inputs:
     while let Some(resp) = inputs_queue.pop_front() {
-        println!("Post-handshake, first input: {:?}", resp);
         let l = resp.len();
         // Count this command's bytes before replying, so a GETACK reports the
         // offset that includes the GETACK command itself.
@@ -1730,10 +1716,10 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
                     let l = input.len();
                     match process_replica_message(&mut store_tx, input, ack_bytes).await {
                         Some(reply) => {
-                            println!(
-                                "Replica (its process), has response for master: {:?}",
-                                reply
-                            );
+                            // println!(
+                            //     "Replica (its process), has response for master: {:?}",
+                            //     reply
+                            // );
                             let _ = write_resp(&mut stream, &reply).await;
                         }
                         _ => {}
