@@ -1608,7 +1608,8 @@ async fn write_command_to_stream(stream: &mut TcpStream, command: &Command) -> s
     result
 }
 
-async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, VecDeque<Resp>) {
+// Returns any leftover resp inputs (remaining from handshake)
+async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> VecDeque<Resp> {
     // Handshake: 1) PING - PONG
     let _ = write_command_to_stream(stream, &Command::Ping { message: None }).await;
     let _ = read_resp_from_stream(stream).await;
@@ -1652,59 +1653,38 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> (bool, V
     // Rdb file
     queue.pop_front();
 
-    (true, queue)
+    queue
 }
 
 // This is run when server is replica
 async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelope>) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
-    // Handshake
-    let (is_handshake_success, mut inputs_queue) =
-        replica_server_handshake(&mut stream, port).await;
+    // Handshake, can contain inputs after handshake
+    let mut inputs_queue = replica_server_handshake(&mut stream, port).await;
 
     // Start counting ACK bytes here:
     let mut ack_bytes = 0;
 
-    // Optional other inputs:
-    while let Some(resp) = inputs_queue.pop_front() {
-        let l = resp.len();
-        // Count this command's bytes before replying, so a GETACK reports the
-        // offset that includes the GETACK command itself.
-        match process_replica_message(&mut store_tx, resp, ack_bytes).await {
-            Some(reply) => {
-                let _ = write_resp(&mut stream, &reply).await;
-            }
-            _ => {}
-        };
-        // Count ACK after command is run
-        ack_bytes += l;
-    }
-
     loop {
-        let read_inputs = read_resp_from_stream(&mut stream).await;
-        match read_inputs {
-            None => {
-                // Master disconnected
-                break;
-            }
-            Some(inputs) => {
-                for input in inputs {
-                    let l = input.len();
-                    match process_replica_message(&mut store_tx, input, ack_bytes).await {
-                        Some(reply) => {
-                            // println!(
-                            //     "Replica (its process), has response for master: {:?}",
-                            //     reply
-                            // );
-                            let _ = write_resp(&mut stream, &reply).await;
-                        }
-                        _ => {}
-                    };
-                    // Count ACK after command is run
-                    ack_bytes += l;
+        if let Some(read_inputs) = read_resp_from_stream(&mut stream).await {
+            inputs_queue.extend(read_inputs);
+        }
+
+        while let Some(input) = inputs_queue.pop_front() {
+            let l = input.len();
+            match process_replica_message(&mut store_tx, input, ack_bytes).await {
+                Some(reply) => {
+                    // println!(
+                    //     "Replica (its process), has response for master: {:?}",
+                    //     reply
+                    // );
+                    let _ = write_resp(&mut stream, &reply).await;
                 }
-            }
+                _ => {}
+            };
+            // Count ACK after command is run
+            ack_bytes += l;
         }
     }
 }
