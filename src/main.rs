@@ -1098,23 +1098,13 @@ impl Store {
                 TryExecuteResult::BlockingBlpop(self.waiter_id, keys)
             }
 
-            Command::Info { section } => {
+            Command::Info { section: _ } => {
                 // Info
-                let replica = if self.is_replica {
-                    "slave".to_string()
-                } else {
-                    "master".to_string()
-                };
-                let mut info = "# Replication".to_string();
-                info.push_str(&format!("\nrole:{}", replica).to_string());
-                info.push_str(
-                    &format!(
-                        "\nmaster_replid:{}",
-                        "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-                    )
-                    .to_string(),
+                let role = if self.is_replica { "slave" } else { "master" };
+                let info = format!(
+                    "# Replication\nrole:{}\nmaster_replid:{}\nmaster_repl_offset:{}",
+                    role, "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb", self.master_ack
                 );
-                info.push_str(&format!("\nmaster_repl_offset:{}", self.master_ack).to_string());
                 TryExecuteResult::Done(Resp::BulkString(info.as_bytes().to_vec()))
             }
 
