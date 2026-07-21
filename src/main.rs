@@ -1646,10 +1646,10 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
             let l = input.len();
             match process_replica_message(&mut store_tx, input, ack_bytes).await {
                 Some(reply) => {
-                    // println!(
-                    //     "Replica (its process), has response for master: {:?}",
-                    //     reply
-                    // );
+                    println!(
+                        "Replica (its process), has response for master: {:?}",
+                        reply
+                    );
                     let _ = write_resp(&mut stream, &reply).await;
                 }
                 _ => {}
