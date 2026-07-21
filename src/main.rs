@@ -1,38 +1,23 @@
-#![allow(unused_imports)]
-//use clap::Parser;
-use core::{num, str};
+use core::str;
 use futures::channel::oneshot;
 use sha2::{Digest, Sha256};
-//use futures::future::select_all;
 use std::collections::HashSet;
 use std::env;
-use std::io::Write;
 use std::num::ParseIntError;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::AtomicUsize;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    error::{self, Error},
-    fmt::{self, Debug, format},
-    hash::Hash,
-    ops::{AddAssign, Mul, MulAssign, Neg},
-    os::unix::process,
-    result,
-    str::{FromStr, from_utf8},
-    sync::Arc,
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    fmt::Debug,
+    time::{Duration, SystemTime, UNIX_EPOCH},
     usize,
 };
 use tokio::select;
-use tokio::stream;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Notify, RwLock},
-    time::timeout,
 };
 
 mod types;
@@ -52,22 +37,14 @@ use pubsub::PubSub;
 mod client;
 use client::ClientRunMode;
 mod sorted_sets;
-use sorted_sets::{SafeFloat, SortedSets};
+use sorted_sets::SortedSets;
 mod geocoding;
 use geocoding::*;
 
-use crate::PrimitiveValue::List;
 use crate::client::ClientDispatch;
 use crate::command::{XreadStreamIdInput, next_stream_id};
 use crate::rdb::{RdbString, RdbValueExpiration};
 use crate::resp::parse_resp;
-
-fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-        .collect()
-}
 
 fn get_ms() -> u64 {
     SystemTime::now()
@@ -1589,12 +1566,6 @@ async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     }
 }
 
-async fn write_resp_to_stream(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
-    let result = stream.write_all(&resp.to_bytes()[..]).await;
-    let _ = stream.flush();
-    result
-}
-
 async fn write_resp(stream: &mut TcpStream, resp: &Resp) -> std::io::Result<()> {
     let result = stream.write_all(&resp.to_bytes()[..]).await;
     let _ = stream.flush();
@@ -1667,8 +1638,8 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
     let mut ack_bytes = 0;
 
     loop {
-        if let Some(read_inputs) = read_resp_from_stream(&mut stream).await {
-            inputs_queue.extend(read_inputs);
+        if let Some(new_inputs) = read_resp_from_stream(&mut stream).await {
+            inputs_queue.extend(new_inputs);
         }
 
         while let Some(input) = inputs_queue.pop_front() {
