@@ -1640,8 +1640,8 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
     loop {
         if let Some(new_inputs) = read_resp_from_stream(&mut stream).await {
             inputs_queue.extend(new_inputs);
+            println!("all inputs: {:?}", inputs_queue);
         }
-        println!("all inputs: {:?}", inputs_queue);
         while let Some(input) = inputs_queue.pop_front() {
             println!("input: {:?}", input);
             let l = input.len();
