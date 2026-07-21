@@ -1514,39 +1514,6 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
     //println!("Client {} disconnected", client_id);
 }
 
-// function that processes messages replica receovis from master
-async fn process_replica_message(
-    store_tx: &mpsc::Sender<Envelope>,
-    input: Resp,
-    ack_bytes: usize,
-) -> Option<Resp> {
-    //println!("Replica processing input: {:?}", input);
-    if let Some(command) = Command::from_resp(&input) {
-        // println!(
-        //     "[process_replica_message] input: {:?}, command: {:?}",
-        //     input, command
-        // );
-        let reply = match command {
-            Command::ReplconfGetAck => Some(Resp::Array(vec![
-                Resp::BulkString("REPLCONF".as_bytes().to_vec()),
-                Resp::BulkString("ACK".as_bytes().to_vec()),
-                Resp::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
-            ])),
-            _ => {
-                let _ = store_tx
-                    .send(Envelope::Replicate {
-                        command: command.clone(),
-                    })
-                    .await;
-                None
-            }
-        };
-        reply
-    } else {
-        None
-    }
-}
-
 async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {
     let mut buffer = [0; 1024];
     match stream.read(&mut buffer).await {
@@ -1627,6 +1594,39 @@ async fn replica_server_handshake(stream: &mut TcpStream, port: u16) -> VecDeque
     queue
 }
 
+// function that processes messages replica receovis from master
+async fn process_replica_message(
+    store_tx: &mpsc::Sender<Envelope>,
+    input: Resp,
+    ack_bytes: usize,
+) -> Option<Resp> {
+    //println!("Replica processing input: {:?}", input);
+    if let Some(command) = Command::from_resp(&input) {
+        // println!(
+        //     "[process_replica_message] input: {:?}, command: {:?}",
+        //     input, command
+        // );
+        let reply = match command {
+            Command::ReplconfGetAck => Some(Resp::Array(vec![
+                Resp::BulkString("REPLCONF".as_bytes().to_vec()),
+                Resp::BulkString("ACK".as_bytes().to_vec()),
+                Resp::BulkString(format!("{}", ack_bytes).as_bytes().to_vec()),
+            ])),
+            _ => {
+                let _ = store_tx
+                    .send(Envelope::Replicate {
+                        command: command.clone(),
+                    })
+                    .await;
+                None
+            }
+        };
+        reply
+    } else {
+        None
+    }
+}
+
 // This is run when server is replica
 async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<Envelope>) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -1638,10 +1638,6 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
     let mut ack_bytes = 0;
 
     loop {
-        if let Some(new_inputs) = read_resp_from_stream(&mut stream).await {
-            inputs_queue.extend(new_inputs);
-            println!("all inputs: {:?}", inputs_queue);
-        }
         while let Some(input) = inputs_queue.pop_front() {
             println!("input: {:?}", input);
             let l = input.len();
@@ -1653,6 +1649,10 @@ async fn run_replica_server(addr: String, port: u16, mut store_tx: mpsc::Sender<
             };
             // Count ACK after command is run
             ack_bytes += l;
+        }
+        if let Some(new_inputs) = read_resp_from_stream(&mut stream).await {
+            inputs_queue.extend(new_inputs);
+            println!("all inputs: {:?}", inputs_queue);
         }
     }
 }
