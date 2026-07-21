@@ -360,34 +360,36 @@ impl Store {
         }
     }
 
-    fn command_set(&mut self, client_id: ClientId, cmd: &Command) -> TryExecuteResult {
-        if let Command::Set { key, value, ex, px } = cmd {
-            let expire_ms = match (ex, px) {
-                (Some(secs), _) => Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64
-                        + secs * 1000,
-                ),
-                (_, Some(ms)) => Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64
-                        + ms,
-                ),
-                _ => None,
-            };
-            let v = Value {
-                value: PrimitiveValue::Str(value.clone()),
-                expire_ms,
-            };
-            self.data.insert(key.clone(), v);
-            TryExecuteResult::Done(Resp::simple_string("OK"))
-        } else {
-            panic!("Not SET command");
-        }
+    fn command_set(
+        &mut self,
+        key: Key,
+        value: Bytes,
+        ex: &Option<u64>,
+        px: &Option<u64>,
+    ) -> TryExecuteResult {
+        let expire_ms = match (ex, px) {
+            (Some(secs), _) => Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64
+                    + secs * 1000,
+            ),
+            (_, Some(ms)) => Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64
+                    + ms,
+            ),
+            _ => None,
+        };
+        let v = Value {
+            value: PrimitiveValue::Str(value),
+            expire_ms,
+        };
+        self.data.insert(key, v);
+        TryExecuteResult::Done(Resp::simple_string("OK"))
     }
 
     fn command_config_get(&self, parameter: &str) -> TryExecuteResult {
@@ -408,7 +410,7 @@ impl Store {
         TryExecuteResult::Done(Resp::Array(params))
     }
 
-    fn command_keys(&self, pattern: &String) -> TryExecuteResult {
+    fn command_keys(&self) -> TryExecuteResult {
         let mut keys: Vec<Resp> = Vec::new();
         for key in self.data.keys() {
             keys.push(Resp::BulkString(key.0.clone()));
@@ -463,12 +465,7 @@ impl Store {
         TryExecuteResult::None
     }
 
-    fn command_publish(
-        &mut self,
-        client_id: ClientId,
-        channel: &str,
-        message: &str,
-    ) -> TryExecuteResult {
+    fn command_publish(&mut self, channel: &str, message: &str) -> TryExecuteResult {
         let resp = Resp::array(vec![
             Resp::bulk_string("message"),
             Resp::bulk_string(channel),
@@ -502,13 +499,7 @@ impl Store {
         TryExecuteResult::Done(rsp)
     }
 
-    fn command_zadd(
-        &mut self,
-        client_id: ClientId,
-        key: &String,
-        score: f64,
-        member: &String,
-    ) -> TryExecuteResult {
+    fn command_zadd(&mut self, key: &String, score: f64, member: &String) -> TryExecuteResult {
         let r = self.sorted_sets.insert(key, score, member);
         TryExecuteResult::Done(Resp::Integer(r as i64))
     }
@@ -691,31 +682,7 @@ impl Store {
         }
 
         match cmd {
-            Command::Set { key, value, ex, px } => {
-                let expire_ms = match (ex, px) {
-                    (Some(secs), _) => Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64
-                            + secs * 1000,
-                    ),
-                    (_, Some(ms)) => Some(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64
-                            + ms,
-                    ),
-                    _ => None,
-                };
-                let v = Value {
-                    value: PrimitiveValue::Str(value),
-                    expire_ms,
-                };
-                self.data.insert(key, v);
-                TryExecuteResult::Done(Resp::simple_string("OK"))
-            }
+            Command::Set { key, value, ex, px } => self.command_set(key, value, &ex, &px),
 
             Command::Get { key } => self.command_get(&key),
 
@@ -743,7 +710,7 @@ impl Store {
             Command::InternalExecuteTx { commands } => {
                 // Optimistic locking check
                 let mut lock_failed = false;
-                for (key, clients) in &self.watched_keys {
+                for clients in self.watched_keys.values() {
                     // println!(
                     //     "tx: client_id {}, checking: key {:?} - {:?}",
                     //     client_id, &key, clients
@@ -790,7 +757,7 @@ impl Store {
             Command::Incr { key } => {
                 if let Some(Value {
                     value: PrimitiveValue::Str(s),
-                    expire_ms,
+                    expire_ms: _,
                 }) = self.data.get_mut(&key)
                 {
                     let result = parser::Parser::parse(&integer::<i64>(), s);
@@ -1089,10 +1056,10 @@ impl Store {
             }
 
             Command::Blpop { keys, timeout: _ } => {
-                let (Resp, is_empty) = self.fetch_blpop(&keys);
+                let (resp, is_empty) = self.fetch_blpop(&keys);
 
                 if !is_empty {
-                    return TryExecuteResult::Done(Resp);
+                    return TryExecuteResult::Done(resp);
                 }
                 self.waiter_id += 1;
                 TryExecuteResult::BlockingBlpop(self.waiter_id, keys)
@@ -1131,21 +1098,17 @@ impl Store {
 
             Command::ConfigGet { parameter } => self.command_config_get(&parameter),
 
-            Command::Keys { pattern } => self.command_keys(&pattern),
+            Command::Keys { .. } => self.command_keys(),
 
             Command::Subscribe { channels } => self.command_subscribe(client_id, &channels),
 
             Command::ReplconfAck { ack_bytes } => self.command_replconf_ack(client_id, ack_bytes),
 
-            Command::Publish { channel, message } => {
-                self.command_publish(client_id, &channel, &message)
-            }
+            Command::Publish { channel, message } => self.command_publish(&channel, &message),
 
             Command::Unsubscribe { channels } => self.command_unsubscribe(client_id, &channels),
 
-            Command::Zadd { key, score, member } => {
-                self.command_zadd(client_id, &key, score, &member)
-            }
+            Command::Zadd { key, score, member } => self.command_zadd(&key, score, &member),
 
             Command::Zrank { key, member } => self.command_zrank(&key, &member),
 
@@ -1274,7 +1237,7 @@ async fn run_store(
                         let _ = reply_channel.send(reply);
                         // Update all connected replicas
                         if let Some(replication_command) = replication_command {
-                            for (client_id, (is_replica, tx)) in &store.clients {
+                            for (is_replica, tx) in store.clients.values() {
                                 if *is_replica {
                                     // println!(
                                     //     "[client_id = {}] Replicating command: {:?}",
@@ -1366,7 +1329,7 @@ async fn run_store(
                     .entry(client_id)
                     .and_modify(|(is_replica, _)| *is_replica = true);
                 let rdb = Resp::file(store.to_rdb().serialize());
-                reply_channel.send(rdb);
+                let _ = reply_channel.send(rdb);
             }
             // This is command execution on replica
             Envelope::Replicate { command } => {
