@@ -19,16 +19,6 @@ pub enum Resp {
 }
 
 impl Resp {
-    // What is default?
-    // Default is just a buffer full of  bytes that can contain 1 or more Resp elements.
-    pub fn from_bytes(input: &[u8]) -> Option<Resp> {
-        if let Ok((resp, _)) = parse_single_resp(input) {
-            resp
-        } else {
-            None
-        }
-    }
-
     pub fn to_bytes(&self) -> Vec<u8> {
         encode_resp(self)
     }

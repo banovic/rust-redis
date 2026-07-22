@@ -1428,7 +1428,7 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
                                         Ok(resp) => resp,
                                         Err(e) => panic!("Something wrong with processing command: {:?}", e),
                                     };
-                                    if let Resp::SimpleString(s) = &resp {
+                                    if let Resp::SimpleString(_) = &resp {
                                         need_auth = false;
                                     }
                                     let _ = write_resp(&mut stream, &resp).await;
@@ -1446,13 +1446,12 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
             store_push = rx.recv() => {
                 // Command received from master, encode it and send it to client / replica
                 // (this is all happening on master, this is process inside master / server)
-                //println!("(master process, client connection handler) received store push message: {:?}", store_push);
                 match store_push.unwrap() {
                     StorePush::Replicate(command) => {
-                        write_command_to_stream(&mut stream, &command).await;
+                        write_command_to_stream(&mut stream, &command).await.expect("Failed to write command to stream.");
                     },
                     StorePush::Message(resp) => {
-                        write_resp(&mut stream, &resp).await;
+                        write_resp(&mut stream, &resp).await.expect("Failed to write RESP to stream");
                     }
                 }
             }
@@ -1463,8 +1462,6 @@ async fn handle_client(client_id: usize, mut stream: TcpStream, store_tx: mpsc::
     let _ = store_tx
         .send(Envelope::UnregisterClient { client_id })
         .await;
-
-    //println!("Client {} disconnected", client_id);
 }
 
 async fn read_resp_from_stream(stream: &mut TcpStream) -> Option<Vec<Resp>> {

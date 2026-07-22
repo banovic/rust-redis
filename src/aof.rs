@@ -68,10 +68,9 @@ impl Aof {
 
     pub async fn create_dir(dirname: &str) {
         let path = Path::new(&dirname);
-        if Path::is_dir(path) {
-            //println!("[aof] dir {:?} already exist", dirname);
-        } else {
-            let _ = fs::create_dir(path)
+        // Create only if it does not exits:
+        if !Path::is_dir(path) {
+            fs::create_dir(path)
                 .await
                 .expect(&format!("[aof] could not create dir {}", dirname));
         }
@@ -96,7 +95,7 @@ impl Aof {
         let mut buffer = String::new();
         let _ = mf_file.read_to_string(&mut buffer).await.unwrap();
         for l in buffer.lines() {
-            let mut parts = l.split(' ').collect::<Vec<_>>();
+            let parts = l.split(' ').collect::<Vec<_>>();
             match (parts.get(1), parts.get(5)) {
                 (Some(aof_filename), Some(t)) if *t == "i" => {
                     return Some(aof_filename.to_string());
@@ -108,20 +107,16 @@ impl Aof {
     }
 
     pub async fn append(&mut self, r: Resp) {
-        match self.aof {
-            Some(ref mut file) => {
-                let bytes = r.to_bytes();
-                let res = file.write_all(&bytes).await;
-                let _ = file.flush().await;
-            }
-            None => {
-                // println!("[aof] no aof file - no append, this is ok");
-            }
+        if let Some(ref mut file) = self.aof {
+            let bytes = r.to_bytes();
+            file.write_all(&bytes)
+                .await
+                .expect("Failed to write to file");
+            let _ = file.flush().await;
         }
     }
 
     pub async fn get_initial_commands(&self) -> Vec<Command> {
-        let mut out = Vec::new();
         if self.appendonly == "yes" {
             // `appendfilename` already holds the resolved AOF data filename
             // (from the manifest) as set in `from_config`.
@@ -130,13 +125,13 @@ impl Aof {
                 self.dir, self.appenddirname, self.appendfilename
             );
             let bytes = read(aof_filename).await.unwrap();
-            let (resps, rest) = parse_resp(&bytes).unwrap();
-            let commands = resps
+            let (resps, _) = parse_resp(&bytes).unwrap();
+            resps
                 .iter()
                 .map(|r| Command::from_resp(r).unwrap())
-                .collect::<Vec<_>>();
-            return commands;
+                .collect::<Vec<Command>>()
+        } else {
+            vec![]
         }
-        out
     }
 }

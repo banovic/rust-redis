@@ -1,10 +1,7 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap},
-    ops::Bound::Included,
+    collections::{BTreeSet, HashMap},
 };
-
-use clap::builder::Str;
 
 #[derive(Debug, Clone, Copy)]
 pub struct SafeFloat(pub f64);
@@ -79,7 +76,7 @@ impl SortedSets {
     pub fn rank(&self, key: &String, member: &String) -> Option<u64> {
         let mut r = 0_u64;
         if let Some(set) = self.data.get(key) {
-            for (k, m) in set.iter() {
+            for (_, m) in set.iter() {
                 if m == member {
                     return Some(r);
                 }
