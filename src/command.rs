@@ -1,9 +1,9 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::{command::Command::ReplconfGetAck, types::*};
+use crate::types::*;
 use crate::{parser::*, resp::Resp};
 
 // milliseconds-seqeunce id
